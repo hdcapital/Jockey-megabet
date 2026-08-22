@@ -7,6 +7,11 @@ name: live-test
 
 on:
   workflow_dispatch: {}
+  # workflow_dispatch only registers from the default branch, so during
+  # development the live test also runs on every push to the dev branch.
+  push:
+    branches:
+      - claude/sportsbet-jockey-megabet-scanner-xbnjzv
 
 jobs:
   live:
