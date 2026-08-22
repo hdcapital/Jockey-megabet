@@ -110,6 +110,9 @@ backtests instead of assumed.
 
 ## 5. Install
 
+> New to all this? See **[QUICKSTART.md](QUICKSTART.md)** for a
+> plain-English, copy-paste setup guide (including a no-git path).
+
 ```bash
 git clone <this repo> && cd Jockey-megabet
 python3 -m venv .venv && source .venv/bin/activate
