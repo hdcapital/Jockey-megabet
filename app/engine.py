@@ -198,18 +198,31 @@ def value_offer(
     betfair_markets: list[BetfairMarket] | None = None,
     models: tuple[str, ...] = ("sportsbet_novig", "betfair", "consensus"),
     now: datetime | None = None,
+    ride_cache: dict | None = None,
 ) -> list[MegabetValuation]:
     """Value one Megabet offer under each requested probability model.
 
     Returns one valuation per model; models with no usable probabilities
     yield fair_probability None (marked unavailable) rather than a guess.
+    ``ride_cache`` (optional, shared across a scan) avoids re-matching and
+    re-logging the same jockey's rides for each of their thresholds.
     """
+    from app.matching.names import normalize_name
+
     settings = settings or get_settings()
     now = now or datetime.now(timezone.utc)
-    card = find_rides(offer.jockey_name, races)
-    rides = build_ride_probabilities(
-        card, offer.meeting_name or "", settings, betfair_markets
-    )
+    cache_key = (normalize_name(offer.meeting_name or ""),
+                 normalize_name(offer.jockey_name))
+    cached = ride_cache.get(cache_key) if ride_cache is not None else None
+    if cached is not None:
+        card, rides = cached
+    else:
+        card = find_rides(offer.jockey_name, races)
+        rides = build_ride_probabilities(
+            card, offer.meeting_name or "", settings, betfair_markets
+        )
+        if ride_cache is not None:
+            ride_cache[cache_key] = (card, rides)
 
     valuations: list[MegabetValuation] = []
     per_model_fair_odds: dict[str, float | None] = {}

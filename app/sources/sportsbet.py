@@ -26,7 +26,8 @@ from datetime import date, datetime, timezone
 from typing import Any, Iterator
 
 from app.config import get_settings
-from app.http import ArchivingClient, FetchResult
+from app.http import ArchivingClient, FetchResult, SourceUnavailableError
+from app.matching.names import normalize_name
 from app.sources.base import (
     MeetingInfo,
     MegabetOffer,
@@ -134,6 +135,39 @@ def _runner_status(node: dict[str, Any]) -> str:
         if node.get(key) is True:
             return "scratched"
     return "active"
+
+
+# Market names that carry the actual win odds in an ordinary racecard.
+# Live schema (2026-08-22): a racecard's `markets` list contains SEVERAL
+# jockey-rich markets per race (Win or Place, Top 2, Top 3, ...) with the
+# same runners under different selection ids and DIFFERENT prices — only the
+# win market's winPrice is a win price. Runner extraction must therefore be
+# restricted to one win market, never a walk over every market.
+_WIN_MARKET_RANK = {"win or place": 0, "win only": 1, "win": 2}
+_JOCKEY_KEYS = ("jockey", "jockeyname", "rider", "ridername")
+
+
+def _find_win_market(payload: Any) -> dict[str, Any] | None:
+    """Best win market in a racecard: named win market, jockey-rich, priced."""
+    candidates: list[tuple[tuple[int, int, int], dict[str, Any]]] = []
+    for node in _walk_dicts(payload):
+        name = _first(node, "name", "marketName")
+        sels = node.get("selections")
+        if not (isinstance(name, str) and isinstance(sels, list) and sels):
+            continue
+        norm = " ".join(name.strip().lower().split())
+        if norm not in _WIN_MARKET_RANK:
+            continue
+        sel_dicts = [s for s in sels if isinstance(s, dict)]
+        jockey_rich = any(
+            any(k.lower() in _JOCKEY_KEYS for k in s) for s in sel_dicts
+        )
+        priced = any(_extract_price(s) is not None for s in sel_dicts)
+        rank = (_WIN_MARKET_RANK[norm], 0 if jockey_rich else 1, 0 if priced else 1)
+        candidates.append((rank, node))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda t: t[0])[1]
 
 
 def _to_dt(value: Any) -> datetime | None:
@@ -406,7 +440,14 @@ class SportsbetClient:
                         continue
                     sparsed = parse_jockey_threshold(sel_name)
                     if not sparsed:
-                        if re.search(r"\bjockey\b", name, re.I):
+                        # Only report genuinely-priced leaf selections; nested
+                        # market dicts (jockey-named, handled by Case C) and
+                        # unpriced nodes are not parse failures.
+                        if (
+                            re.search(r"\bjockey\b", name, re.I)
+                            and "selections" not in sel
+                            and _extract_price(sel) is not None
+                        ):
                             unparsed_names.append(sel_name)
                         continue
                     price = _extract_price(sel)
@@ -541,16 +582,31 @@ class SportsbetClient:
         runners: list[RunnerInfo] = []
         winners: list[str] = []
         seen_ids: set[str] = set()
-        for node in _walk_dicts(payload):
+        seen_names: set[str] = set()
+        win_market = _find_win_market(payload)
+        if win_market is not None:
+            candidate_nodes: list[dict[str, Any]] = [
+                s for s in win_market.get("selections", []) if isinstance(s, dict)
+            ]
+            in_win_market = True
+        else:
+            # Fallback for unknown layouts: whole-document walk, jockey-keyed.
+            candidate_nodes = list(_walk_dicts(payload))
+            in_win_market = False
+        for node in candidate_nodes:
             horse = _first(node, "runnerName", "horseName")
-            if horse is None and "jockey" in {k.lower() for k in node}:
+            if horse is None and (
+                in_win_market or any(k.lower() in _JOCKEY_KEYS for k in node)
+            ):
                 horse = _first(node, "name")
             if not isinstance(horse, str) or not horse.strip():
                 continue
             rid = str(_first(node, "id", "runnerId", "selectionId", default=horse))
-            if rid in seen_ids:
+            norm_name = normalize_name(horse)
+            if rid in seen_ids or norm_name in seen_names:
                 continue
             seen_ids.add(rid)
+            seen_names.add(norm_name)
             jockey = _first(node, "jockeyName", "jockey", "riderName", "rider")
             if isinstance(jockey, dict):
                 jockey = _first(jockey, "name", "fullName")

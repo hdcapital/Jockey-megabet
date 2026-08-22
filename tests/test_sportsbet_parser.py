@@ -194,6 +194,61 @@ class TestLiveShapeRacecardParsing:
         assert scr.win_odds is None
 
 
+class TestMultiMarketRacecard:
+    """Regression: live racecards carry the SAME runners in several markets
+    (Win or Place, Top 2, Top 3...) with different selection ids and
+    different prices. Runners must come from the win market only — no
+    duplicates, no Top-N prices leaking in as win prices."""
+
+    def _payload(self):
+        def sel(sid, horse, jockey, price):
+            return {
+                "id": sid, "name": horse, "runnerNumber": 1, "jockey": jockey,
+                "isOut": False, "statusCode": "A",
+                "prices": [{"priceCode": "L", "winPrice": price}],
+            }
+
+        return {
+            "id": 830001, "raceNumber": 5, "competitionName": "Testville",
+            "startTime": 1787364900, "statusCode": "A", "bettingStatus": "PRICED",
+            "markets": [
+                {"id": 1, "name": "Win or Place", "numPlaces": 3, "selections": [
+                    sel(11, "Milsons Point", "Alpha Rider", 4.0),
+                    sel(12, "Other Horse", "Other Jockey", 2.5),
+                ]},
+                {"id": 2, "name": "Top 2", "selections": [
+                    sel(21, "Milsons Point", "Alpha Rider", 1.9),
+                    sel(22, "Other Horse", "Other Jockey", 1.4),
+                ]},
+                {"id": 3, "name": "Top 3", "selections": [
+                    sel(31, "Milsons Point", "Alpha Rider", 1.4),
+                    sel(32, "Other Horse", "Other Jockey", 1.15),
+                ]},
+            ],
+        }
+
+    def test_no_duplicate_runners_and_win_prices_used(self):
+        client = SportsbetClient.__new__(SportsbetClient)
+        card = SportsbetClient.parse_racecard(client, self._payload(), event_id="830001")
+        race = card.races[0]
+        names = [r.horse_name for r in race.runners]
+        assert sorted(names) == ["Milsons Point", "Other Horse"]  # once each
+        by_name = {r.horse_name: r for r in race.runners}
+        # Win-or-Place market's win price, never the Top-2/Top-3 price.
+        assert by_name["Milsons Point"].win_odds == 4.0
+        assert by_name["Other Horse"].win_odds == 2.5
+
+    def test_ride_matching_not_ambiguous(self):
+        from app.matching.jockeys import find_rides
+
+        client = SportsbetClient.__new__(SportsbetClient)
+        card = SportsbetClient.parse_racecard(client, self._payload(), event_id="830001")
+        result = find_rides("Alpha Rider", card.races)
+        assert result.match_status == "matched"
+        assert len(result.rides) == 1
+        assert result.rides[0].runner.horse_name == "Milsons Point"
+
+
 class TestRacecardParsing:
     def setup_method(self):
         self.client = SportsbetClient.__new__(SportsbetClient)

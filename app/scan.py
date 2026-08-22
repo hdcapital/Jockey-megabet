@@ -249,6 +249,7 @@ def run_scan(args: argparse.Namespace) -> int:
         betfair_markets = fetch_betfair_markets(scan_date)
 
     valuations: list[MegabetValuation] = []
+    ride_cache: dict = {}
     for offer in offers:
         races = races_by_meeting.get(normalize_name(offer.meeting_name or ""), [])
         if not races:
@@ -257,7 +258,8 @@ def run_scan(args: argparse.Namespace) -> int:
                 offer.meeting_name, offer.market_name,
             )
         valuations.extend(
-            value_offer(offer, races, settings, betfair_markets, now=now)
+            value_offer(offer, races, settings, betfair_markets, now=now,
+                        ride_cache=ride_cache)
         )
 
     if args.min_edge is not None:
