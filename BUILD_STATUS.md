@@ -28,11 +28,27 @@ every Sportsbet endpoint. Verified against real responses:
   answering documented JSON (`INVALID_USERNAME_OR_PASSWORD`,
   `INVALID_APP_KEY` without credentials) — Model B needs only real creds.
 
-**Still unverified (pending `scripts/probe_deep.py` output)**: the
-runner-level fields inside racecards (jockey name key, win price location,
-scratched marker) and the exact market/selection naming inside Jockey
-Extras racecards. The scanner will fail loudly with archived payloads
-rather than guess until these are confirmed.
+**Deep probe (user-run from AU, 2026-08-22) closed the remaining gaps** —
+all parser-facing fields are now live-verified and implemented:
+
+* **Jockey Extras racecards**: each market is NAMED AFTER THE JOCKEY
+  ("Blake Shinn"); selections carry the threshold in words ("To Ride Two
+  or More Winners") with the price at `prices[priceCode=L].winPrice`.
+  Parser Case C implements exactly this shape (10 live meetings observed:
+  Sandown, Newcastle, Cairns, Morphettville, Port Macquarie, Gympie,
+  Belmont, Kununurra, Newman, Toowoomba).
+* **Ordinary racecards**: runners sit in the top-level `markets` list
+  ("Win or Place") with `jockey`, `runnerNumber`, `trainer`, `isOut` and a
+  `prices` list per price code — `L` is the live price; `MDP`/`TMD` are
+  stale morning references and are now explicitly NEVER used (they would
+  otherwise silently price scratched runners).
+* **Scratches**: a scratched runner's selection flips to `statusCode "S"`
+  with its live win price withdrawn (observed live); also `isOut: true`
+  is honoured.
+
+**Remaining to verify live**: one full `python -m app.scan` producing the
+valuation table on a race day (next user run), results capture after races
+resolve, and Betfair with real credentials.
 
 ## What is working (verified by actually running it)
 

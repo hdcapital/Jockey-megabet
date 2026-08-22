@@ -114,15 +114,84 @@ class TestListingDiscovery:
         # Only the Jockey Extras event's racecard is fetched (not trainer/multis).
         assert sum("/Events/111001/" in u for u in fetched) == 1
         assert not any("/Events/111002/" in u for u in fetched)
-        by_jockey = {o.jockey_name: o for o in offers}
-        assert set(by_jockey) == {"Alpha Rider", "Beta Hoop"}
-        assert by_jockey["Alpha Rider"].threshold == 2
-        assert by_jockey["Alpha Rider"].odds == 3.4
-        assert by_jockey["Beta Hoop"].threshold == 1  # "to ride a winner"
-        assert by_jockey["Beta Hoop"].odds == 1.65
+        by_key = {(o.jockey_name, o.threshold): o for o in offers}
+        # Live shape: jockey = market name, thresholds = selection names.
+        assert set(by_key) == {
+            ("Alpha Rider", 1), ("Alpha Rider", 2), ("Alpha Rider", 3),
+            ("Beta Hoop", 2),
+        }
+        assert by_key[("Alpha Rider", 1)].odds == 1.75
+        assert by_key[("Alpha Rider", 2)].odds == 6.5
+        assert by_key[("Alpha Rider", 3)].odds == 51.0
+        assert by_key[("Beta Hoop", 2)].odds == 2.7
         # Meeting context comes from the listing stub.
         assert all(o.meeting_name == "Testville" for o in offers)
         assert all(o.meeting_source_id == "111001" for o in offers)
+
+
+class TestSelectionThresholdParsing:
+    """Live-verified selection names ('To Ride Two or More Winners')."""
+
+    @pytest.mark.parametrize(
+        "name,expected",
+        [
+            ("To Ride One or More Winners", 1),
+            ("To Ride Two or More Winners", 2),
+            ("To Ride Three or More Winners", 3),
+            ("To Ride Four or More Winners", 4),
+            ("To Ride Five or More Winners", 5),
+            ("To Ride 2+ Winners", 2),
+            ("To Ride a Winner", 1),
+            ("To Ride a Double", 2),
+            ("to ride two or more winners", 2),
+        ],
+    )
+    def test_parsed(self, name, expected):
+        from app.sources.sportsbet import parse_selection_threshold
+
+        assert parse_selection_threshold(name) == expected
+
+    @pytest.mark.parametrize("name", ["Yes", "Winx", "Most Winners", "To Win The Race"])
+    def test_non_threshold_selections_rejected(self, name):
+        from app.sources.sportsbet import parse_selection_threshold
+
+        assert parse_selection_threshold(name) is None
+
+
+class TestLiveShapeRacecardParsing:
+    """Ordinary racecard in the live-verified shape (synthetic fixture)."""
+
+    def setup_method(self):
+        self.client = SportsbetClient.__new__(SportsbetClient)
+        self.card = SportsbetClient.parse_racecard(
+            self.client, load("racecard_live_shape_synthetic.json"), event_id="820001"
+        )
+
+    def test_venue_and_race_metadata(self):
+        assert self.card.meeting.venue == "Testville"
+        race = self.card.races[0]
+        assert race.race_number == 2
+        assert race.status == "open"
+
+    def test_runners_jockeys_and_live_prices(self):
+        by_name = {r.horse_name: r for r in self.card.races[0].runners}
+        assert set(by_name) == {
+            "Fast Fixture", "Second Sample", "Scratchy Example", "Fourth Fake"
+        }
+        ff = by_name["Fast Fixture"]
+        assert ff.jockey_name == "Alpha Rider"
+        assert ff.saddlecloth == 1
+        # Live 'L' price is used, never the stale MDP/TMD morning prices.
+        assert ff.win_odds == 2.3
+        assert by_name["Second Sample"].win_odds == 4.6
+
+    def test_scratched_runner_detected_and_not_priced(self):
+        by_name = {r.horse_name: r for r in self.card.races[0].runners}
+        scr = by_name["Scratchy Example"]
+        # statusCode "S" with the live price withdrawn -> scratched, and the
+        # stale MDP price must NOT leak through as a live price.
+        assert scr.status == "scratched"
+        assert scr.win_odds is None
 
 
 class TestRacecardParsing:

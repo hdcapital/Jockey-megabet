@@ -1,0 +1,91 @@
+{
+  "_fixture_note": "SYNTHETIC TEST FIXTURE — invented names/prices mirroring the LIVE-VERIFIED (2026-08-22) ordinary racecard shape: 'markets' list with jockey-rich selections, prices per priceCode (L = live, MDP/TMD = stale morning refs), scratched runner as statusCode S with no live winPrice. NOT real market data; never production output.",
+  "id": 820001,
+  "raceNumber": 2,
+  "competitionId": 570,
+  "competitionName": "Testville",
+  "country": "Australia",
+  "startTime": 1787364900,
+  "bettingStatus": "PRICED",
+  "name": "R2 Test Handicap",
+  "displayName": "R2 Testville",
+  "statusCode": "A",
+  "classId": 1,
+  "type": "horse",
+  "srmExoticsMarketList": [
+    {
+      "id": 660001,
+      "name": "Win",
+      "selections": [
+        {"id": 771001, "name": "Fast Fixture", "isOut": false, "prices": [{"priceCode": "L"}], "statusCode": "A"},
+        {"id": 771002, "name": "Scratchy Example", "isOut": false, "prices": [{"priceCode": "L"}], "statusCode": "S"}
+      ]
+    }
+  ],
+  "markets": [
+    {
+      "id": 550001,
+      "name": "Win or Place",
+      "numPlaces": 3,
+      "statusCode": "A",
+      "selections": [
+        {
+          "id": 440001,
+          "name": "Fast Fixture",
+          "runnerNumber": 1,
+          "drawNumber": 9,
+          "jockey": "Alpha Rider",
+          "trainer": "T Rainer",
+          "isOut": false,
+          "prices": [
+            {"priceCode": "MDP", "winPrice": 3.0},
+            {"priceCode": "TMD", "winPrice": 3.2},
+            {"priceCode": "L", "winPriceNum": 13, "winPriceDen": 10, "winPrice": 2.3, "placePrice": 1.3}
+          ],
+          "result": "-",
+          "statusCode": "A"
+        },
+        {
+          "id": 440002,
+          "name": "Second Sample",
+          "runnerNumber": 2,
+          "jockey": "Beta Hoop",
+          "isOut": false,
+          "prices": [
+            {"priceCode": "MDP", "winPrice": 4.0},
+            {"priceCode": "L", "winPrice": 4.6, "placePrice": 1.8}
+          ],
+          "result": "-",
+          "statusCode": "A"
+        },
+        {
+          "id": 440003,
+          "name": "Scratchy Example",
+          "runnerNumber": 3,
+          "jockey": "Gamma Pilot",
+          "isOut": false,
+          "prices": [
+            {"priceCode": "MDP", "winPrice": 6.0},
+            {"priceCode": "L"}
+          ],
+          "result": "-",
+          "statusCode": "S"
+        },
+        {
+          "id": 440004,
+          "name": "Fourth Fake",
+          "runnerNumber": 4,
+          "jockey": "Delta Steer",
+          "isOut": false,
+          "prices": [
+            {"priceCode": "L", "winPrice": 8.0, "placePrice": 2.4}
+          ],
+          "result": "-",
+          "statusCode": "A"
+        }
+      ]
+    }
+  ],
+  "results": [],
+  "deductions": []
+}

@@ -1,24 +1,65 @@
 {
-  "_fixture_note": "SYNTHETIC TEST FIXTURE — invented data for unit-testing the Jockey Extras racecard market walker. NOT real market data; never production output. The real market shape is pending live verification via scripts/probe_deep.py.",
+  "_fixture_note": "SYNTHETIC TEST FIXTURE — invented names/prices mirroring the LIVE-VERIFIED (2026-08-22) Jockey Extras racecard shape: markets named after jockeys, selections named 'To Ride <N> or More Winners' with winPrice under prices[priceCode=L]. NOT real market data; never production output.",
   "id": 111001,
-  "name": "Jockey Extras - Testville",
+  "className": "Racing Extras",
+  "competitionId": 23306,
   "competitionName": "Jockey Extras",
   "startTime": 1787365800,
+  "bettingStatus": "PRICED",
+  "name": "Jockey Extras - Testville",
+  "displayName": "Jockey Extras",
   "statusCode": "A",
+  "classId": 161,
   "markets": [
     {
       "id": 990001,
-      "name": "Alpha Rider to Ride 2 or More Winners",
+      "name": "Alpha Rider",
+      "marketType": "-",
+      "statusCode": "A",
       "selections": [
-        {"id": 880001, "name": "Yes", "price": {"winPrice": 3.4}}
+        {
+          "id": 880001,
+          "name": "To Ride One or More Winners",
+          "isOut": false,
+          "prices": [{"priceCode": "L", "winPriceNum": 3, "winPriceDen": 4, "winPrice": 1.75, "placePrice": 1.75}],
+          "result": "-",
+          "statusCode": "A"
+        },
+        {
+          "id": 880002,
+          "name": "To Ride Two or More Winners",
+          "isOut": false,
+          "prices": [{"priceCode": "L", "winPriceNum": 11, "winPriceDen": 2, "winPrice": 6.5, "placePrice": 6.5}],
+          "result": "-",
+          "statusCode": "A"
+        },
+        {
+          "id": 880003,
+          "name": "To Ride Three or More Winners",
+          "isOut": false,
+          "prices": [{"priceCode": "L", "winPrice": 51.0, "placePrice": 51.0}],
+          "result": "-",
+          "statusCode": "A"
+        }
       ]
     },
     {
       "id": 990002,
-      "name": "Beta Hoop to Ride a Winner",
+      "name": "Beta Hoop",
+      "marketType": "-",
+      "statusCode": "A",
       "selections": [
-        {"id": 880002, "name": "Yes", "price": {"winPrice": 1.65}}
+        {
+          "id": 880004,
+          "name": "To Ride Two or More Winners",
+          "isOut": false,
+          "prices": [{"priceCode": "L", "winPrice": 2.7, "placePrice": 2.7}],
+          "statusCode": "A"
+        }
       ]
     }
-  ]
+  ],
+  "results": [],
+  "exoticResults": [],
+  "deductions": []
 }

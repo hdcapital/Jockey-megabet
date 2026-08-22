@@ -93,11 +93,14 @@ def _walk_dicts(node: Any) -> Iterator[dict[str, Any]]:
 
 
 def _extract_price(node: dict[str, Any]) -> float | None:
-    """Pull a decimal win price out of a selection/runner dict.
+    """Pull the LIVE decimal win price out of a selection/runner dict.
 
-    Sportsbet has used several shapes: a bare ``winPrice``/``price`` number,
-    or a nested price object with ``winPrice``, or a list of price objects
-    per bet type. Returns None when no positive decimal price is found.
+    Live schema (2026-08-22): selections carry a ``prices`` list with one
+    entry per price code — ``L`` is the live price; ``MDP``/``TMD`` are
+    morning reference prices. Only ``L`` (or untagged) entries are used:
+    falling back to a morning price would silently price scratched runners
+    whose live price has been withdrawn. Older/nested shapes (a bare
+    ``winPrice`` number or a ``price`` object) are still supported.
     """
     for key in ("winPrice", "returnWin", "price", "odds", "decimalPrice"):
         v = node.get(key)
@@ -110,7 +113,7 @@ def _extract_price(node: dict[str, Any]) -> float | None:
     prices = node.get("prices")
     if isinstance(prices, list):
         for p in prices:
-            if isinstance(p, dict):
+            if isinstance(p, dict) and p.get("priceCode") in ("L", None):
                 inner = _extract_price(p)
                 if inner:
                     return inner
@@ -127,7 +130,7 @@ def _runner_status(node: dict[str, Any]) -> str:
             low = v.replace(" ", "").lower()
             if low in _SCRATCH_WORDS:
                 return "scratched"
-    for key in ("isScratched", "scratched"):
+    for key in ("isScratched", "scratched", "isOut"):
         if node.get(key) is True:
             return "scratched"
     return "active"
@@ -158,14 +161,35 @@ def _to_dt(value: Any) -> datetime | None:
 # Megabet market-name parsing
 # ---------------------------------------------------------------------------
 
-# Observed naming patterns for Jockey Megabets, e.g.
+# Live-verified (2026-08-22) Jockey Extras selection names carry the
+# threshold as a number word: "To Ride One or More Winners", "To Ride Two
+# or More Winners", ... The jockey is the *market* name ("Blake Shinn").
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+_NUM = r"(?:\d+|" + "|".join(_NUMBER_WORDS) + r")"
+
+
+def _num(token: str) -> int:
+    token = token.strip().lower()
+    return int(token) if token.isdigit() else _NUMBER_WORDS[token]
+
+
+_SELECTION_THRESHOLD = re.compile(
+    rf"^\s*to\s+ride\s+(?:(?P<k>{_NUM})\s*(?:\+|or\s+more)?\s*win(?:ner)?s?"
+    rf"|a\s+(?P<word>winner|double|treble|quaddie))\s*[.!]?\s*$",
+    re.I,
+)
+
+# Older naming patterns where jockey + threshold sit in one market name, e.g.
 #   "James McDonald to ride 2+ winners", "J McDonald 3+ Wins",
 #   "Jockey Megabet - Craig Williams To Ride A Double".
 _THRESHOLD_PATTERNS = [
-    re.compile(r"(?P<jockey>.+?)\s+to\s+ride\s+(?P<k>\d+)\s*(?:\+|or\s+more)\s*win(?:ner)?s?", re.I),
+    re.compile(rf"(?P<jockey>.+?)\s+to\s+ride\s+(?P<k>{_NUM})\s*(?:\+|or\s+more)\s*win(?:ner)?s?", re.I),
     re.compile(r"(?P<jockey>.+?)\s+(?P<k>\d+)\s*\+\s*win(?:ner)?s?", re.I),
     re.compile(r"(?P<jockey>.+?)\s+to\s+ride\s+a\s+(?P<word>winner|double|treble|quaddie)", re.I),
-    re.compile(r"(?P<jockey>.+?)\s+to\s+win\s+(?:on\s+)?(?P<k>\d+)\s*(?:\+|or\s+more)\s*(?:races|rides)", re.I),
+    re.compile(rf"(?P<jockey>.+?)\s+to\s+win\s+(?:on\s+)?(?P<k>{_NUM})\s*(?:\+|or\s+more)\s*(?:races|rides)", re.I),
 ]
 _WORD_THRESHOLDS = {"winner": 1, "double": 2, "treble": 3, "quaddie": 4}
 _NAME_PREFIX = re.compile(r"^(?:jockey\s+megabet\s*[-:–]\s*|jockey\s*[-:–]\s*)", re.I)
@@ -173,6 +197,16 @@ _NAME_PREFIX = re.compile(r"^(?:jockey\s+megabet\s*[-:–]\s*|jockey\s*[-:–]\s
 _NOT_JOCKEY = re.compile(
     r"\b(trainer|stable|sire|owner|favourite|favorite)s?\b|\bany\s+jockey\b", re.I
 )
+
+
+def parse_selection_threshold(selection_name: str) -> int | None:
+    """Threshold from a bare selection name like 'To Ride Two or More Winners'."""
+    m = _SELECTION_THRESHOLD.match(selection_name)
+    if not m:
+        return None
+    if m.group("k") is not None:
+        return _num(m.group("k"))
+    return _WORD_THRESHOLDS[m.group("word").lower()]
 
 
 def parse_jockey_threshold(market_name: str) -> tuple[str, int] | None:
@@ -191,7 +225,7 @@ def parse_jockey_threshold(market_name: str) -> tuple[str, int] | None:
         jockey = m.group("jockey").strip(" -–:")
         k = m.groupdict().get("k")
         if k is not None:
-            return jockey, int(k)
+            return jockey, _num(k)
         word = m.groupdict().get("word")
         if word:
             return jockey, _WORD_THRESHOLDS[word.lower()]
@@ -316,6 +350,35 @@ class SportsbetClient:
             selections = _first(node, "selections", "outcomes", "markets")
             parsed = parse_jockey_threshold(name)
 
+            # Case C (live schema 2026-08-22): the market is named after the
+            # jockey ("Blake Shinn") and each selection name carries only the
+            # threshold ("To Ride Two or More Winners"). The shape itself is
+            # the signal — a market whose selections parse as bare thresholds
+            # is a jockey market; no name heuristics needed.
+            if isinstance(selections, list) and not _NOT_JOCKEY.search(name):
+                matched_any = False
+                for sel in selections:
+                    if not isinstance(sel, dict):
+                        continue
+                    sel_name = _first(sel, "name", "selectionName", "displayName")
+                    if not isinstance(sel_name, str):
+                        continue
+                    k = parse_selection_threshold(sel_name)
+                    if k is None:
+                        continue
+                    if sel.get("isOut") is True:
+                        continue
+                    price = _extract_price(sel)
+                    if price is None:
+                        continue
+                    offers.append(
+                        self._offer(node, sel, f"{name.strip()} - {sel_name.strip()}",
+                                    name.strip(), k, price, fetched_at)
+                    )
+                    matched_any = True
+                if matched_any:
+                    continue
+
             # Case A: the market name itself carries jockey + threshold and
             # the market has priced selections (typically a single "Yes").
             if parsed and isinstance(selections, list):
@@ -385,7 +448,11 @@ class SportsbetClient:
             market, "meetingDate", "eventDate", "startTime", "displayStartTime"
         )
         dt = _to_dt(raw_date)
-        status = _first(market, "status", "marketStatus", default="open")
+        status = _first(market, "status", "marketStatus")
+        if status is None:
+            # Live schema uses single-letter statusCode: A=active, S=suspended.
+            code = str(_first(market, "statusCode", default="")).strip().upper()
+            status = {"A": "open", "S": "suspended", "R": "resulted"}.get(code, "open")
         return MegabetOffer(
             source=SOURCE,
             market_id=str(_first(market, "marketId", "id", default="")),
@@ -490,6 +557,11 @@ class SportsbetClient:
             saddle = _first(node, "runnerNumber", "saddlecloth", "number", "barrierNumber")
             price = _extract_price(node)
             rstatus = _runner_status(node)
+            # Live schema: a scratched runner's selection flips to
+            # statusCode "S" and its live ("L") win price is withdrawn.
+            sel_code = str(node.get("statusCode") or "").strip().upper()
+            if rstatus == "active" and sel_code == "S" and price is None:
+                rstatus = "scratched"
             runners.append(
                 RunnerInfo(
                     source=SOURCE,
