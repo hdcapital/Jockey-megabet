@@ -1,0 +1,41 @@
+{
+  "_fixture_note": "SYNTHETIC TEST FIXTURE — invented data mirroring the live-verified 2026-08-22 Megabets listing shape (list of Racing Extras event stubs). NOT real market data; never production output.",
+  "_payload": [
+    {
+      "id": 111001,
+      "startTime": 1787365800,
+      "numMarkets": 2,
+      "name": "Jockey Extras - Testville",
+      "classId": "161",
+      "className": "Racing Extras",
+      "competitionId": 23306,
+      "competitionName": "Jockey Extras",
+      "statusCode": "A",
+      "httpLink": "Sportsbook/Racing/Events/111001/Racecard"
+    },
+    {
+      "id": 111002,
+      "startTime": 1787365800,
+      "numMarkets": 5,
+      "name": "Trainer Extras - Testville",
+      "classId": "161",
+      "className": "Racing Extras",
+      "competitionId": 23551,
+      "competitionName": "Trainer Extras",
+      "statusCode": "A",
+      "httpLink": "Sportsbook/Racing/Events/111002/Racecard"
+    },
+    {
+      "id": 111003,
+      "startTime": 1787365800,
+      "numMarkets": 1,
+      "name": "Testville Best Bets Multis",
+      "classId": "161",
+      "className": "Racing Extras",
+      "competitionId": 30035,
+      "competitionName": "Racing Best Bets Multis",
+      "statusCode": "A",
+      "httpLink": "Sportsbook/Racing/Events/111003/Racecard"
+    }
+  ]
+}

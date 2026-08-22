@@ -87,7 +87,6 @@ def main() -> int:
     base = sportsbet.get_settings().sportsbet_base_url
 
     probe(client, "megabets", sportsbet.ENDPOINTS["megabets"].format(base=base))
-    probe(client, "challenges", sportsbet.ENDPOINTS["challenges"].format(base=base))
 
     # AU racing 'today' can be UTC today or tomorrow; probe both.
     racecard_event = None

@@ -72,6 +72,59 @@ class TestMegabetsPayloadParsing:
         assert SportsbetClient.parse_megabets(self.client, {"megabets": []}) == []
 
 
+class TestListingDiscovery:
+    """Discovery over the live-verified listing shape (synthetic fixtures)."""
+
+    def test_jockey_extras_stubs_identified(self):
+        listing = load("megabets_listing_synthetic.json")["_payload"]
+        stubs = SportsbetClient.jockey_extras_events(listing)
+        assert [s["id"] for s in stubs] == [111001]
+
+    def test_stub_meeting_name(self):
+        listing = load("megabets_listing_synthetic.json")["_payload"]
+        stub = SportsbetClient.jockey_extras_events(listing)[0]
+        assert SportsbetClient._stub_meeting_name(stub) == "Testville"
+
+    def test_discovery_fetches_event_racecards(self):
+        from datetime import datetime, timezone
+
+        from app.http import FetchResult
+
+        listing = load("megabets_listing_synthetic.json")["_payload"]
+        extras_card = load("jockey_extras_racecard_synthetic.json")
+        fetched: list[str] = []
+
+        class FakeHttp:
+            def get_json(self, url):
+                fetched.append(url)
+                import json as _json
+
+                body = extras_card if "/Events/" in url else listing
+                raw = _json.dumps(body).encode()
+                return FetchResult(
+                    url=url, status_code=200,
+                    fetched_at=datetime(2026, 8, 22, tzinfo=timezone.utc),
+                    body=raw, sha256="f" * 64,
+                )
+
+        client = SportsbetClient.__new__(SportsbetClient)
+        client.client = FakeHttp()
+        offers = client.discover_jockey_megabets()
+
+        # Only the Jockey Extras event's racecard is fetched (not trainer/multis).
+        assert sum("/Events/111001/" in u for u in fetched) == 1
+        assert not any("/Events/111002/" in u for u in fetched)
+        by_jockey = {o.jockey_name: o for o in offers}
+        assert set(by_jockey) == {"Alpha Rider", "Beta Hoop"}
+        assert by_jockey["Alpha Rider"].threshold == 2
+        assert by_jockey["Alpha Rider"].odds == 3.4
+        assert by_jockey["Beta Hoop"].threshold == 1  # "to ride a winner"
+        assert by_jockey["Beta Hoop"].odds == 1.65
+        # Meeting context comes from the listing stub.
+        assert all(o.meeting_name == "Testville" for o in offers)
+        assert all(o.meeting_source_id == "111001" for o in offers)
+
+
 class TestRacecardParsing:
     def setup_method(self):
         self.client = SportsbetClient.__new__(SportsbetClient)

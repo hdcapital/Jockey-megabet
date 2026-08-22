@@ -1,7 +1,38 @@
 # BUILD STATUS
 
 Last updated: 2026-08-22 (UTC) — after live GitHub Actions runs
-32543539735 and 32543634489.
+32543539735 / 32543634489 and the first successful live probe from an
+Australian machine.
+
+## Live schema verification (2026-08-22, user-run probe from AU — HTTP 200s)
+
+`scripts/probe_endpoints.py` run on an Australian Windows machine reached
+every Sportsbet endpoint. Verified against real responses:
+
+* **Megabets listing**: returns a LIST of Racing Extras event stubs
+  (`{id, name, competitionName, startTime, statusCode, numMarkets,
+  httpLink}`). Jockey Megabets = events with
+  `competitionName == "Jockey Extras"`, named "Jockey Extras - <Meeting>"
+  (5+ meetings live at probe time). Their markets live in the event's
+  Racecard. Discovery has been REWRITTEN to this two-stage shape and is
+  covered by fixture tests.
+* **/Racing/Challenges**: dead — live 404 `ResourceNotFound`; removed.
+* **AllRacing/{date}**: `{dates:[{meetingDate, sections:[{raceType,
+  meetings:[{id, name, className, events:[{id, raceNumber, startTime,
+  name, statusCode, bettingStatus, result?, ...}]}]}]}]}` — compatible
+  with the existing walker; horse-only filter added via `className`.
+* **Racecard top level**: venue = `competitionName`, `statusCode` "A"/"R",
+  `bettingStatus` "PRICED"/"RESULTED", `result` = placings by saddlecloth
+  ("1,16,18") — status mapping and winner extraction updated accordingly.
+* **Betfair**: both official endpoints reachable from the AU machine and
+  answering documented JSON (`INVALID_USERNAME_OR_PASSWORD`,
+  `INVALID_APP_KEY` without credentials) — Model B needs only real creds.
+
+**Still unverified (pending `scripts/probe_deep.py` output)**: the
+runner-level fields inside racecards (jockey name key, win price location,
+scratched marker) and the exact market/selection naming inside Jockey
+Extras racecards. The scanner will fail loudly with archived payloads
+rather than guess until these are confirmed.
 
 ## What is working (verified by actually running it)
 

@@ -1,0 +1,24 @@
+{
+  "_fixture_note": "SYNTHETIC TEST FIXTURE — invented data for unit-testing the Jockey Extras racecard market walker. NOT real market data; never production output. The real market shape is pending live verification via scripts/probe_deep.py.",
+  "id": 111001,
+  "name": "Jockey Extras - Testville",
+  "competitionName": "Jockey Extras",
+  "startTime": 1787365800,
+  "statusCode": "A",
+  "markets": [
+    {
+      "id": 990001,
+      "name": "Alpha Rider to Ride 2 or More Winners",
+      "selections": [
+        {"id": 880001, "name": "Yes", "price": {"winPrice": 3.4}}
+      ]
+    },
+    {
+      "id": 990002,
+      "name": "Beta Hoop to Ride a Winner",
+      "selections": [
+        {"id": 880002, "name": "Yes", "price": {"winPrice": 1.65}}
+      ]
+    }
+  ]
+}
