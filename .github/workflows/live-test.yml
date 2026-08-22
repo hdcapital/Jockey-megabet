@@ -2,11 +2,16 @@
 # against the real Sportsbet service, and surface the real responses in the
 # job log / artifacts so parser issues can be fixed against actual data.
 #
-# Verified finding (run 32543539735, 2026-08-22): from GitHub-hosted runners
-# (US Azure IPs) Sportsbet's Akamai edge responds 403 Forbidden — Sportsbet
-# geo-restricts to Australian IPs. The Sportsbet legs of this workflow can
-# only succeed on a self-hosted runner in Australia (change `runs-on`).
-# The Betfair reachability probe works from hosted runners.
+# Verified findings (runs 32543539735 / 32543634489, 2026-08-22) from
+# GitHub-hosted runners (US Azure IPs):
+#   * Sportsbet: Akamai edge answers 403 "Access Denied" on every endpoint —
+#     Sportsbet serves Australian IPs only.
+#   * Betfair: identity SSO answers 403 (Betfair block page) and the betting
+#     JSON-RPC endpoint answers 403 via a Cloudflare "Attention Required"
+#     challenge — Betfair's edge blocks these datacenter IPs too.
+# Both are the providers' own access controls; this project does not bypass
+# them. This workflow can only retrieve live data on a SELF-HOSTED runner in
+# Australia (change `runs-on` to [self-hosted]) or an equivalent AU host.
 
 name: live-test
 

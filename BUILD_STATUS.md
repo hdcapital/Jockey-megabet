@@ -1,6 +1,7 @@
 # BUILD STATUS
 
-Last updated: 2026-08-22 (UTC)
+Last updated: 2026-08-22 (UTC) — after live GitHub Actions runs
+32543539735 and 32543634489.
 
 ## What is working (verified by actually running it)
 
@@ -39,18 +40,36 @@ Last updated: 2026-08-22 (UTC)
   timeouts, realistic User-Agent — exercised by the live-attempt code path.
 * No credentials committed; `.gitignore` covers `.env`, keys, certs, tokens.
 
-## Known external blocker (unresolved, honestly reported)
+## Known external blockers (unresolved, honestly reported)
 
-**This build environment's egress proxy denies all betting hosts**, so no
-live market data could be retrieved from here:
+**1. This build environment's egress proxy denies all betting hosts**:
 
 * `CONNECT www.sportsbet.com.au:443` → **HTTP 403** from the org egress
   proxy ("policy denial"), confirmed via `$HTTPS_PROXY/__agentproxy/status`.
 * Same 403 for `api.betfair.com`, `identitysso.betfair.com`,
   `identitysso-cert.betfair.com`, `www.betfair.com.au`, `api.beta.tab.com.au`.
 
-The proxy documentation explicitly instructs that policy denials must be
-reported, not worked around. Consequently:
+**2. Live tests were then run on GitHub-hosted Actions runners** (US Azure,
+`northcentralus`; runs 32543539735 and 32543634489 on 2026-08-22, evidence
+in the job logs and uploaded raw-response artifacts). TCP/TLS connected
+fine, but both providers' edges denied the requests themselves:
+
+* Sportsbet (`www.sportsbet.com.au`, all four probed endpoints):
+  `HTTP 403`, `Server: AkamaiGHost`, HTML body `"Access Denied ... Reference
+  #18.aa3a2f17..."` — Sportsbet serves Australian IPs only.
+* Betfair identity SSO (`identitysso.betfair.com/api/login`): `HTTP 403`
+  with a Betfair-branded HTML block page (not the documented JSON).
+* Betfair betting API (`api.betfair.com/exchange/betting/json-rpc/v1`):
+  `HTTP 403` Cloudflare "Attention Required" challenge page.
+
+These are the providers' own geo/bot access controls; per project rules
+they are reported, not bypassed. The scanner behaved exactly as designed in
+both runs: real errors (now including a snippet of the actual block-page
+body) and zero fabricated output; unit suite passed 105/105 on the runner.
+
+**Resolution requires an Australian vantage point**: run the scanner (or a
+GitHub self-hosted runner, `runs-on: [self-hosted]`) on an AU
+machine/VPS/residential connection. Consequently:
 
 ## NOT yet verified against real data (blocked by the above)
 
