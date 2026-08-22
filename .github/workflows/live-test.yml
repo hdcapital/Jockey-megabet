@@ -1,0 +1,39 @@
+# Live diagnostic: run the live integration test + endpoint probe + one scan
+# against the real Sportsbet service from a GitHub-hosted runner, and surface
+# the real responses in the job log / artifacts so parser issues can be fixed
+# against actual data. Manual trigger only.
+
+name: live-test
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Unit tests (no network)
+        run: python -m pytest -q
+      - name: Probe real endpoints (prints actual response structure)
+        run: python scripts/probe_endpoints.py
+      - name: Live integration test
+        continue-on-error: true
+        run: python -m pytest -m live -rs -v
+      - name: One real scan
+        continue-on-error: true
+        run: python -m app.scan -v --show-low
+      - name: Upload raw responses + observations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-test-${{ github.run_id }}
+          path: |
+            data/raw/
+            data/*.db
+          if-no-files-found: ignore
