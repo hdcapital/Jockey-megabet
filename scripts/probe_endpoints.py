@@ -119,8 +119,54 @@ def main() -> int:
         print("\n=== no race event id discovered; racecard probe skipped")
 
     client.close()
+    probe_betfair_reachability()
     print("\n=== probe complete")
     return 0
+
+
+def probe_betfair_reachability() -> None:
+    """Check the official Betfair API endpoints answer, WITHOUT credentials.
+
+    Sends an empty login POST and an unauthenticated JSON-RPC call. Both are
+    expected to be *rejected* — the point is to verify the network path and
+    that the endpoints speak the documented protocol. No secrets involved.
+    """
+    from app.config import get_settings
+
+    s = get_settings()
+    bf = ArchivingClient("betfair")
+    for label, url, kwargs in [
+        (
+            "identity login (no creds — expect a documented JSON rejection)",
+            f"{s.betfair_identity_url}/api/login",
+            dict(
+                data={"username": "", "password": ""},
+                headers={"X-Application": "probe",
+                         "Content-Type": "application/x-www-form-urlencoded",
+                         "Accept": "application/json"},
+            ),
+        ),
+        (
+            "betting JSON-RPC (no session — expect INVALID_APP_KEY/NO_SESSION)",
+            s.betfair_api_url,
+            dict(
+                json_body={"jsonrpc": "2.0",
+                           "method": "SportsAPING/v1.0/listEventTypes",
+                           "params": {"filter": {}}, "id": 1},
+                headers={"X-Application": "probe", "Content-Type": "application/json"},
+            ),
+        ),
+    ]:
+        print(f"\n=== PROBE betfair {label}: {url}")
+        try:
+            result = bf.post_json(url, **kwargs)
+            print(f"    HTTP {result.status_code}  "
+                  f"content-type={result.headers.get('content-type', '?')}")
+            print("    BODY (first 600 chars): "
+                  + result.body.decode("utf-8", errors="replace")[:600])
+        except SourceUnavailableError as exc:
+            print(f"    UNAVAILABLE: {exc}")
+    bf.close()
 
 
 if __name__ == "__main__":

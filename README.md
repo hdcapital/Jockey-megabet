@@ -87,6 +87,11 @@ backtests instead of assumed.
 
 ## 4. Limitations (read this)
 
+* **Sportsbet geo-restricts to Australian IPs** (verified 2026-08-22: its
+  Akamai edge returns 403 to US-based GitHub runners). The scanner must run
+  from an Australian network/VPS; the bundled GitHub Actions workflows only
+  work with a self-hosted AU runner. This is Sportsbet's access control and
+  the scanner does not attempt to bypass it.
 * Sportsbet's endpoints are unofficial and can change or be geo-restricted
   at any time; the adapter fails loudly (with archived payloads), it does
   not guess. **The current parser field-mapping was written against

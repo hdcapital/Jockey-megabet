@@ -1,7 +1,12 @@
 # Live diagnostic: run the live integration test + endpoint probe + one scan
-# against the real Sportsbet service from a GitHub-hosted runner, and surface
-# the real responses in the job log / artifacts so parser issues can be fixed
-# against actual data. Manual trigger only.
+# against the real Sportsbet service, and surface the real responses in the
+# job log / artifacts so parser issues can be fixed against actual data.
+#
+# Verified finding (run 32543539735, 2026-08-22): from GitHub-hosted runners
+# (US Azure IPs) Sportsbet's Akamai edge responds 403 Forbidden — Sportsbet
+# geo-restricts to Australian IPs. The Sportsbet legs of this workflow can
+# only succeed on a self-hosted runner in Australia (change `runs-on`).
+# The Betfair reachability probe works from hosted runners.
 
 name: live-test
 

@@ -39,12 +39,23 @@ class SourceUnavailableError(Exception):
     of being papered over with fabricated data.
     """
 
-    def __init__(self, source: str, url: str, detail: str, status: int | None = None):
+    def __init__(
+        self,
+        source: str,
+        url: str,
+        detail: str,
+        status: int | None = None,
+        body_snippet: str | None = None,
+    ):
         self.source = source
         self.url = url
         self.detail = detail
         self.status = status
-        super().__init__(f"{source} unavailable ({url}): {detail}")
+        self.body_snippet = body_snippet
+        msg = f"{source} unavailable ({url}): {detail}"
+        if body_snippet:
+            msg += f" | response body: {body_snippet}"
+        super().__init__(msg)
 
 
 @dataclass
@@ -185,8 +196,17 @@ class ArchivingClient:
         if self.archive:
             result.archive_path = self._write_archive(result)
         if resp.status_code >= 400:
+            # Keep a compressed sample of the real error body (e.g. a CDN
+            # geo-block page) so failures are reported with evidence.
+            snippet = " ".join(
+                body[:600].decode("utf-8", errors="replace").split()
+            )
             raise SourceUnavailableError(
-                self.source, url, f"HTTP {resp.status_code}", status=resp.status_code
+                self.source,
+                url,
+                f"HTTP {resp.status_code}",
+                status=resp.status_code,
+                body_snippet=snippet or None,
             )
         return result
 

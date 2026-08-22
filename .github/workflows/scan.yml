@@ -2,6 +2,12 @@
 # delayed), so this suits low-frequency observation capture, not live betting.
 # Enable by uncommenting the schedule block; run manually via workflow_dispatch.
 #
+# IMPORTANT (verified 2026-08-22): Sportsbet's Akamai edge returns HTTP 403 to
+# GitHub-hosted runners (US Azure IPs) — Sportsbet serves Australian IPs only.
+# On a hosted runner this job will honestly report "source unavailable".
+# To actually collect data on a schedule, register a SELF-HOSTED runner on an
+# Australian machine/VPS and change `runs-on` below to [self-hosted].
+#
 # Observations are written to a SQLite DB inside the runner; upload-artifact
 # preserves each run's DB and raw archives. For serious collection, run the
 # scanner on a VPS instead (see README "Run continuously").
