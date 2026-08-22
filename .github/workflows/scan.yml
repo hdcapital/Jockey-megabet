@@ -1,0 +1,47 @@
+# Optional scheduled scanner. GitHub Actions cron is coarse (>= ~5 min, often
+# delayed), so this suits low-frequency observation capture, not live betting.
+# Enable by uncommenting the schedule block; run manually via workflow_dispatch.
+#
+# IMPORTANT (verified 2026-08-22): Sportsbet's Akamai edge returns HTTP 403 to
+# GitHub-hosted runners (US Azure IPs) — Sportsbet serves Australian IPs only.
+# On a hosted runner this job will honestly report "source unavailable".
+# To actually collect data on a schedule, register a SELF-HOSTED runner on an
+# Australian machine/VPS and change `runs-on` below to [self-hosted].
+#
+# Observations are written to a SQLite DB inside the runner; upload-artifact
+# preserves each run's DB and raw archives. For serious collection, run the
+# scanner on a VPS instead (see README "Run continuously").
+
+name: scan
+
+on:
+  workflow_dispatch: {}
+  # schedule:
+  #   - cron: "*/30 20-23,0-8 * * *"  # every 30 min around AU racing hours (UTC)
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Run tests (fast, no network)
+        run: python -m pytest -q
+      - name: Run one scan
+        env:
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_USERNAME: ${{ secrets.BETFAIR_USERNAME }}
+          BETFAIR_PASSWORD: ${{ secrets.BETFAIR_PASSWORD }}
+        run: python -m app.scan --show-low || true
+      - name: Upload observations
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-${{ github.run_id }}
+          path: |
+            data/*.db
+            data/raw/
+          if-no-files-found: ignore

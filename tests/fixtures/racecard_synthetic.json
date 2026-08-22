@@ -1,0 +1,58 @@
+{
+  "_fixture_note": "SYNTHETIC TEST FIXTURE — invented data for unit-testing the parser shape only. NOT real market data. Must never be served or displayed as live output.",
+  "eventId": 810001,
+  "eventName": "Testville Race 1",
+  "raceNumber": 1,
+  "venueName": "Testville",
+  "meetingId": 700001,
+  "startTime": 1755820800,
+  "status": "OPEN",
+  "raceType": "Thoroughbred",
+  "markets": [
+    {
+      "marketName": "Win or Place",
+      "selections": [
+        {
+          "id": 5001,
+          "runnerName": "Fast Fixture",
+          "runnerNumber": 1,
+          "jockeyName": "Alpha Rider",
+          "resultStatus": null,
+          "price": {"winPrice": 2.6}
+        },
+        {
+          "id": 5002,
+          "runnerName": "Second Sample (NZ)",
+          "runnerNumber": 2,
+          "jockeyName": "Beta Hoop",
+          "resultStatus": null,
+          "price": {"winPrice": 4.8}
+        },
+        {
+          "id": 5003,
+          "runnerName": "Scratchy Example",
+          "runnerNumber": 3,
+          "jockeyName": "Gamma Pilot",
+          "resultStatus": "Scratched",
+          "price": {"winPrice": 6.0}
+        },
+        {
+          "id": 5004,
+          "runnerName": "Fourth Fake",
+          "runnerNumber": 4,
+          "jockeyName": "Delta Steer",
+          "resultStatus": null,
+          "price": {"winPrice": 8.5}
+        },
+        {
+          "id": 5005,
+          "runnerName": "Fifth Phantom",
+          "runnerNumber": 5,
+          "jockeyName": "A Rider",
+          "resultStatus": null,
+          "price": {"winPrice": 12.0}
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+[project]
+name = "jockey-megabet-scanner"
+version = "0.1.0"
+description = "Fair-value scanner for Sportsbet Jockey Megabets"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.2",
+    "SQLAlchemy>=2.0",
+    "tenacity>=8.2",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live: tests that hit real external services (deselect with -m 'not live')",
+]
+addopts = "-m 'not live'"
+
+[tool.setuptools.packages.find]
+include = ["app*"]

@@ -1,0 +1,21 @@
+# Example systemd unit for unattended VPS operation.
+# Install:
+#   sudo cp scripts/megabet-scanner.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now megabet-scanner
+[Unit]
+Description=Sportsbet Jockey Megabet fair-value scanner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust paths/user for your host.
+WorkingDirectory=/opt/jockey-megabet-scanner
+EnvironmentFile=/opt/jockey-megabet-scanner/.env
+ExecStart=/opt/jockey-megabet-scanner/.venv/bin/python -m app.scan --loop
+Restart=on-failure
+RestartSec=30
+User=megabet
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,50 @@
+{
+  "_fixture_note": "SYNTHETIC TEST FIXTURE — invented data for unit-testing the parser shape only. NOT real market data. Must never be served or displayed as live output. Shaped after publicly researched Sportsbet /apigw/sportsbook-racing payload conventions; the live schema must be re-verified against real responses (see BUILD_STATUS.md).",
+  "megabets": [
+    {
+      "marketId": 900001,
+      "name": "Alpha Rider to Ride 2+ Winners",
+      "meetingName": "Testville",
+      "eventId": 700001,
+      "startTime": 1755820800,
+      "status": "OPEN",
+      "selections": [
+        {"id": 1, "name": "Yes", "price": {"winPrice": 3.5}}
+      ]
+    },
+    {
+      "marketId": 900002,
+      "name": "Jockey Megabet - Beta Hoop 3+ Wins",
+      "meetingName": "Testville",
+      "eventId": 700001,
+      "startTime": 1755820800,
+      "status": "OPEN",
+      "selections": [
+        {"id": 2, "name": "Yes", "price": {"winPrice": 9.0}}
+      ]
+    },
+    {
+      "marketId": 900003,
+      "name": "Jockey Challenge - Exampleton",
+      "meetingName": "Exampleton",
+      "eventId": 700002,
+      "startTime": 1755824400,
+      "status": "OPEN",
+      "selections": [
+        {"id": 3, "name": "Gamma Pilot to Ride a Double", "price": {"winPrice": 4.2}},
+        {"id": 4, "name": "Delta Steer to ride 4+ winners", "price": {"winPrice": 26.0}},
+        {"id": 5, "name": "Most Wins - Any Jockey", "price": {"winPrice": 1.9}}
+      ]
+    },
+    {
+      "marketId": 900004,
+      "name": "Trainer Megabet - Some Trainer 2+ Winners As Trainer Only",
+      "meetingName": "Testville",
+      "eventId": 700001,
+      "status": "OPEN",
+      "selections": [
+        {"id": 6, "name": "Yes", "price": {"winPrice": 5.0}}
+      ]
+    }
+  ]
+}
