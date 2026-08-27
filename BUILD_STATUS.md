@@ -67,7 +67,7 @@ EV arithmetic, scratches excluded, LOW rows hidden.
   with each valuation.
 * Output is grouped by type (Jockey Megabets / Trainer Megabets / Jockey
   Challenge tables); DB rows carry `market_type` (additive migration for
-  older SQLite files included). 152 tests pass.
+  older SQLite files included). 149 tests pass.
 
 **Remaining to verify live**: trainer-market selection wording and any
 challenge markets on a real race day; results capture after races resolve;
