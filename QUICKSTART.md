@@ -47,6 +47,10 @@ parser against live data if Sportsbet's current schema differs.
    py -m app.scan             # Windows
    ```
 
+   Windows shortcut: skip the typing entirely — double-click **scan.bat**
+   in the project folder (or **scan-loop.bat** for continuous scanning,
+   **backtest.bat** for the backtest report).
+
 6. **Keep it running all day** (refreshes every 3 minutes):
 
    ```
