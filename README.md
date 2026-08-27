@@ -148,8 +148,23 @@ python -m app.scan
 # filters:
 python -m app.scan --meeting Randwick --jockey "J McDonald" --min-edge 0.05
 python -m app.scan --date 2026-08-22 --source sportsbet --show-low
-python -m app.scan --no-db     # don't persist observations
+python -m app.scan --type trainer   # jockey | trainer | challenge | all
+python -m app.scan --no-db          # don't persist observations
 ```
+
+One scan covers three market families, reported in separate tables:
+
+* **Jockey Megabets** ("X to ride 2+ winners") — Poisson-binomial over the
+  jockey's rides.
+* **Trainer Megabets** ("Trainer Extras") — same distribution, but a
+  trainer's per-race win probability is the sum of their runners' fair
+  probabilities (exact: race winners are mutually exclusive).
+* **Jockey Challenge** (most winners at a meeting, when Sportsbet offers
+  it) — seeded Monte Carlo over the whole meeting's de-vigged win markets,
+  so competitors are correctly negatively correlated. Settlement is
+  *assumed* to be "most winners, dead-heats divided" and that assumption is
+  stored with every valuation; verify Sportsbet's actual challenge rules
+  (points systems differ) before relying on these numbers.
 
 Output columns: meeting, jockey, active rides, threshold, Sportsbet odds,
 fair probability, per-model fair odds, EV and data-quality grade. LOW-quality

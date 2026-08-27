@@ -131,6 +131,65 @@ def test_jockey_change_sets_possible_void_flag(temp_db):
         assert runner.jockey == "Replacement Rider"
 
 
+def test_mixed_types_persist_and_render_by_type(temp_db, capsys, monkeypatch):
+    from rich.console import Console
+    from sqlalchemy import select
+
+    from app.database import models as m
+    from app.database.repository import session_factory
+    from app.engine import value_challenges
+    from app.reporting import tables
+    from app.scan import persist_scan
+    from app.sources.base import ChallengeOffer
+
+    monkeypatch.setattr(tables, "console", Console(width=250))
+
+    offer_j, races = make_world()
+    for r in races:  # give the fixture trainers so a trainer market prices
+        for run in r.runners:
+            run.trainer_name = "Tessa Painter" if run.jockey_name == "Alpha Rider" \
+                else "Other Trainer"
+    offer_t = MegabetOffer(
+        source="sportsbet", market_id="m2", selection_id="s2",
+        meeting_name="Testville", meeting_source_id=None,
+        meeting_date=MEETING_DATE, jockey_name="Tessa Painter", threshold=1,
+        odds=2.4, market_name="Tessa Painter - To Train 1+ Winners",
+        fetched_at=NOW, market_type="trainer",
+    )
+    offer_c = ChallengeOffer(
+        source="sportsbet", market_id="c1", selection_id="ch1",
+        meeting_name="Testville", meeting_source_id=None,
+        meeting_date=MEETING_DATE, competitor="Alpha Rider", odds=2.1,
+        market_name="Jockey Challenge - Testville", fetched_at=NOW,
+    )
+    races_by_meeting = {"testville": races}
+    vals = (value_offer(offer_j, races, get_settings(), now=NOW)
+            + value_offer(offer_t, races, get_settings(), now=NOW))
+    cvals = value_challenges([offer_c], races_by_meeting, get_settings(), now=NOW)
+    persist_scan([offer_j, offer_t], races_by_meeting, vals, NOW,
+                 challenge_valuations=cvals)
+
+    tables.render_all(vals, cvals, NOW)
+    out = capsys.readouterr().out
+    assert "Jockey Megabets" in out
+    assert "Trainer Megabets" in out
+    assert "Tessa Painter" in out
+    assert "Jockey Challenge (most wins)" in out
+
+    Session = session_factory()
+    with Session() as s:
+        types = set(s.scalars(select(m.MegabetMarket.market_type)).all())
+        assert types == {"jockey", "trainer", "challenge"}
+        challenge_val = s.scalar(
+            select(m.ModelValuation).join(
+                m.MegabetMarket,
+                m.ModelValuation.megabet_id == m.MegabetMarket.megabet_id,
+            ).where(m.MegabetMarket.market_type == "challenge")
+        )
+        assert challenge_val.probability_model == "mc_most_wins"
+        assert challenge_val.fair_probability is not None
+
+
 def test_backtest_cli_runs_empty(temp_db, capsys):
     from app.database.repository import init_db
     init_db()

@@ -19,7 +19,12 @@ import time
 from datetime import date, datetime, timezone
 
 from app.config import get_settings
-from app.engine import MegabetValuation, value_offer
+from app.engine import (
+    ChallengeValuation,
+    MegabetValuation,
+    value_challenges,
+    value_offer,
+)
 from app.http import SourceUnavailableError
 from app.logging_setup import setup_logging
 from app.matching.names import normalize_name, venue_names_match
@@ -97,6 +102,7 @@ def persist_scan(
     races_by_meeting: dict[str, list[RaceInfo]],
     valuations: list[MegabetValuation],
     now: datetime,
+    challenge_valuations: list[ChallengeValuation] | None = None,
 ) -> None:
     from app.database.repository import Repository, session_factory
     from app.engine import price_race_sportsbet
@@ -162,6 +168,7 @@ def persist_scan(
                 offer.source, offer.market_id or offer.selection_id or offer.market_name,
                 meeting_row, offer.meeting_name, offer.meeting_date,
                 offer.jockey_name, offer.threshold, offer.market_name,
+                market_type=offer.market_type,
             )
             if v.model == "consensus":  # store the SB price once per offer scan
                 repo.add_megabet_price(
@@ -199,7 +206,30 @@ def persist_scan(
                     "megabet %s flagged possible-void: jockey change involving %s",
                     offer.market_name, offer.jockey_name,
                 )
-    log.info("scan persisted: %d valuations", len(valuations))
+
+        for cv in challenge_valuations or []:
+            offer = cv.offer
+            megabet = repo.upsert_megabet(
+                offer.source,
+                offer.market_id or offer.selection_id or offer.market_name,
+                None, offer.meeting_name, offer.meeting_date,
+                offer.competitor, 0, offer.market_name,
+                market_type="challenge",
+            )
+            repo.add_megabet_price(
+                megabet, offer.odds, offer.market_status, now, offer.raw_sha256
+            )
+            repo.add_valuation(
+                megabet, now, cv.model,
+                fair_probability=cv.fair_probability, fair_odds=cv.fair_odds,
+                sportsbet_odds=offer.odds, expected_return=cv.expected_return,
+                number_of_rides=cv.n_races, quality=cv.quality,
+                quality_detail=cv.quality_detail, ride_probabilities=None,
+            )
+    log.info(
+        "scan persisted: %d megabet + %d challenge valuations",
+        len(valuations), len(challenge_valuations or []),
+    )
 
 
 def jockey_names_match_safe(a: str, b: str) -> bool:
@@ -213,9 +243,19 @@ def run_scan(args: argparse.Namespace) -> int:
     now = datetime.now(timezone.utc)
     scan_date = date.fromisoformat(args.date) if args.date else now.date()
 
+    kinds = {
+        "all": ("jockey", "trainer"),
+        "jockey": ("jockey",),
+        "trainer": ("trainer",),
+        "challenge": (),
+    }[args.type]
     with SportsbetClient() as sb:
         try:
-            offers = sb.discover_jockey_megabets()
+            offers = sb.discover_megabet_offers(kinds) if kinds else []
+            challenge_offers = (
+                sb.discover_jockey_challenges()
+                if args.type in ("all", "challenge") else []
+            )
         except SourceUnavailableError as exc:
             tables.print_source_unavailable("Sportsbet", str(exc))
             return 2
@@ -228,18 +268,29 @@ def run_scan(args: argparse.Namespace) -> int:
                 o for o in offers
                 if o.meeting_name and venue_names_match(o.meeting_name, args.meeting)
             ]
+            challenge_offers = [
+                o for o in challenge_offers
+                if o.meeting_name and venue_names_match(o.meeting_name, args.meeting)
+            ]
         if args.jockey:
             offers = [
                 o for o in offers
                 if normalize_name(args.jockey) in normalize_name(o.jockey_name)
                 or jockey_names_match_safe(args.jockey, o.jockey_name)
             ]
-        if not offers:
+            challenge_offers = [
+                o for o in challenge_offers
+                if normalize_name(args.jockey) in normalize_name(o.competitor)
+                or jockey_names_match_safe(args.jockey, o.competitor)
+            ]
+        if not offers and not challenge_offers:
             tables.print_no_megabets(datetime.now(timezone.utc))
             return 0
 
         try:
-            races_by_meeting = gather_meeting_races(sb, offers, scan_date)
+            races_by_meeting = gather_meeting_races(
+                sb, list(offers) + list(challenge_offers), scan_date
+            )
         except (SourceUnavailableError, SchemaMismatchError) as exc:
             tables.print_source_unavailable("Sportsbet racecards", str(exc))
             return 2
@@ -262,6 +313,10 @@ def run_scan(args: argparse.Namespace) -> int:
                         ride_cache=ride_cache)
         )
 
+    challenge_valuations = value_challenges(
+        challenge_offers, races_by_meeting, settings, now=now
+    )
+
     if args.min_edge is not None:
         keep_offers = {
             id(v.offer) for v in valuations
@@ -269,11 +324,17 @@ def run_scan(args: argparse.Namespace) -> int:
             and v.expected_return >= args.min_edge
         }
         valuations = [v for v in valuations if id(v.offer) in keep_offers]
+        challenge_valuations = [
+            v for v in challenge_valuations
+            if v.expected_return is not None and v.expected_return >= args.min_edge
+        ]
 
     if not args.no_db:
-        persist_scan(offers, races_by_meeting, valuations, now)
+        persist_scan(offers, races_by_meeting, valuations, now,
+                     challenge_valuations=challenge_valuations)
 
-    tables.render_valuations(valuations, now, show_low_quality=args.show_low)
+    tables.render_all(valuations, challenge_valuations, now,
+                      show_low_quality=args.show_low)
     return 0
 
 
@@ -289,6 +350,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", help="scan date YYYY-MM-DD (default: today UTC)")
     parser.add_argument("--source", choices=["all", "sportsbet", "betfair"],
                         default="all", help="probability sources to use")
+    parser.add_argument("--type", choices=["all", "jockey", "trainer", "challenge"],
+                        default="all", help="market types to scan")
     parser.add_argument("--show-low", action="store_true",
                         help="include LOW data-quality rows in the table")
     parser.add_argument("--no-db", action="store_true",

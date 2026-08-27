@@ -44,6 +44,7 @@ class RunnerInfo:
     horse_name: str
     saddlecloth: int | None = None
     jockey_name: str | None = None
+    trainer_name: str | None = None
     status: str = "active"  # active | scratched | unknown
     win_odds: float | None = None
     odds_timestamp: datetime | None = None
@@ -74,7 +75,11 @@ class RacecardInfo:
 
 @dataclass
 class MegabetOffer:
-    """One Jockey Megabet selection: a jockey/threshold at a price."""
+    """One Extras selection: an entity (jockey or trainer) + threshold at a price.
+
+    ``jockey_name`` holds the entity's name for both market types;
+    ``market_type`` says whether it is a jockey or a trainer market.
+    """
 
     source: str
     market_id: str
@@ -84,6 +89,25 @@ class MegabetOffer:
     meeting_date: date | None
     jockey_name: str
     threshold: int  # k in "k+ wins"
+    odds: float
+    market_name: str
+    fetched_at: datetime
+    market_status: str = "open"
+    raw_sha256: str | None = None
+    market_type: str = "jockey"  # jockey | trainer
+
+
+@dataclass
+class ChallengeOffer:
+    """One Jockey Challenge selection: a jockey to ride the most winners."""
+
+    source: str
+    market_id: str
+    selection_id: str
+    meeting_name: str | None
+    meeting_source_id: str | None
+    meeting_date: date | None
+    competitor: str  # jockey name (or a catch-all like "Any Other Jockey")
     odds: float
     market_name: str
     fetched_at: datetime

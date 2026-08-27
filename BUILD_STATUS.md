@@ -46,9 +46,32 @@ all parser-facing fields are now live-verified and implemented:
   with its live win price withdrawn (observed live); also `isOut: true`
   is honoured.
 
-**Remaining to verify live**: one full `python -m app.scan` producing the
-valuation table on a race day (next user run), results capture after races
-resolve, and Betfair with real credentials.
+**Live-verified end-to-end (user run, 2026-08-22 12:19 AEST)**: a full
+`python -m app.scan` produced the real valuation table — 84 jockey offers
+across 10 meetings, 72 racecards, correct fair-probability monotonicity and
+EV arithmetic, scratches excluded, LOW rows hidden.
+
+## Extended market types (added after the verified jockey run)
+
+* **Trainer Extras** (`--type trainer`, on by default): discovery of the
+  live-observed "Trainer Extras - <Meeting>" events; a trainer's per-race
+  win probability is the exact sum of their runners' fair probabilities,
+  then the same Poisson-binomial. Trainer selection *wording* is parsed
+  tolerantly (To Train / To Have / To Saddle ...) but has NOT yet been seen
+  live — a mismatch logs loudly with the raw payload archived.
+* **Jockey Challenge** (most wins): seeded Monte Carlo over every jockey at
+  the meeting (validated in tests against exact enumeration, incl.
+  dead-heat division and "Any Other" aggregation). No live Sportsbet
+  challenge market has been observed yet; discovery reports honestly.
+  Settlement is assumed "most winners, dead-heats divided" and recorded
+  with each valuation.
+* Output is grouped by type (Jockey Megabets / Trainer Megabets / Jockey
+  Challenge tables); DB rows carry `market_type` (additive migration for
+  older SQLite files included). 152 tests pass.
+
+**Remaining to verify live**: trainer-market selection wording and any
+challenge markets on a real race day; results capture after races resolve;
+Betfair with real credentials.
 
 ## What is working (verified by actually running it)
 

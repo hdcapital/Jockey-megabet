@@ -29,6 +29,7 @@ from app.config import get_settings
 from app.http import ArchivingClient, FetchResult, SourceUnavailableError
 from app.matching.names import normalize_name
 from app.sources.base import (
+    ChallengeOffer,
     MeetingInfo,
     MegabetOffer,
     RacecardInfo,
@@ -63,8 +64,15 @@ ENDPOINTS = {
     ),
 }
 
-# competitionName that carries Jockey Megabet markets (live-verified).
+# competitionNames that carry per-entity win-count markets (live-verified
+# for "jockey extras"; "trainer extras" observed in the same listing with
+# the same event-stub shape — its internal market wording is parsed
+# tolerantly and archived on mismatch).
 JOCKEY_EXTRAS_COMPETITION = "jockey extras"
+EXTRAS_COMPETITIONS = {
+    "jockey": "jockey extras",
+    "trainer": "trainer extras",
+}
 
 
 def _url(name: str, **kwargs: str) -> str:
@@ -210,9 +218,14 @@ def _num(token: str) -> int:
     return int(token) if token.isdigit() else _NUMBER_WORDS[token]
 
 
+# Verbs cover jockey markets ("To Ride ...", live-verified) and the
+# plausible trainer variants ("To Train / To Have / To Saddle ..."); if the
+# live trainer wording differs, parsing fails loudly with the raw payload
+# archived rather than guessing.
 _SELECTION_THRESHOLD = re.compile(
-    rf"^\s*to\s+ride\s+(?:(?P<k>{_NUM})\s*(?:\+|or\s+more)?\s*win(?:ner)?s?"
-    rf"|a\s+(?P<word>winner|double|treble|quaddie))\s*[.!]?\s*$",
+    rf"^\s*to\s+(?:ride|train|have|saddle|prepare|win)\s+"
+    rf"(?:(?P<k>{_NUM})\s*(?:\+|or\s+more)?\s*win(?:ner)?s?"
+    rf"|a\s+(?:winning\s+)?(?P<word>winner|double|treble|quaddie))\s*[.!]?\s*$",
     re.I,
 )
 
@@ -227,10 +240,17 @@ _THRESHOLD_PATTERNS = [
 ]
 _WORD_THRESHOLDS = {"winner": 1, "double": 2, "treble": 3, "quaddie": 4}
 _NAME_PREFIX = re.compile(r"^(?:jockey\s+megabet\s*[-:–]\s*|jockey\s*[-:–]\s*)", re.I)
-# Win-count markets that are not a *single named jockey's* win count.
+# Win-count markets that are not a *single named entity's* win count.
+# The excluded words depend on which entity we are parsing for: a trainer
+# market legitimately sits inside a "Trainer Extras" event, so only the
+# OTHER entity's word disqualifies a market name.
 _NOT_JOCKEY = re.compile(
     r"\b(trainer|stable|sire|owner|favourite|favorite)s?\b|\bany\s+jockey\b", re.I
 )
+_NOT_TRAINER = re.compile(
+    r"\b(jockey|rider|sire|owner|favourite|favorite)s?\b|\bany\s+trainer\b", re.I
+)
+_NOT_ENTITY = {"jockey": _NOT_JOCKEY, "trainer": _NOT_TRAINER}
 
 
 def parse_selection_threshold(selection_name: str) -> int | None:
@@ -288,24 +308,45 @@ class SportsbetClient:
         return self.client.get_json(_url("megabets"))
 
     @staticmethod
-    def jockey_extras_events(payload: Any) -> list[dict[str, Any]]:
-        """Event stubs from the Megabets listing that carry Jockey Megabets.
+    def extras_events(payload: Any, kind: str) -> list[dict[str, Any]]:
+        """Event stubs from the Megabets listing for one Extras kind.
 
         Live schema (2026-08-22): the endpoint returns a list of event stubs;
-        Jockey Megabet events have competitionName "Jockey Extras" and names
-        like "Jockey Extras - Sandown".
+        Extras events have competitionName "Jockey Extras"/"Trainer Extras"
+        and names like "Jockey Extras - Sandown".
         """
+        wanted = EXTRAS_COMPETITIONS[kind]
         stubs = []
         for node in _walk_dicts(payload):
             comp = node.get("competitionName")
             name = node.get("name")
-            is_jockey = (
-                isinstance(comp, str) and comp.strip().lower() == JOCKEY_EXTRAS_COMPETITION
+            is_match = (
+                isinstance(comp, str) and comp.strip().lower() == wanted
             ) or (
                 isinstance(name, str)
-                and re.match(r"^\s*jockey\s+(extras|megabets?)\b", name, re.I)
+                and re.match(rf"^\s*{kind}\s+(extras|megabets?)\b", name, re.I)
             )
-            if is_jockey and node.get("id") is not None:
+            if is_match and node.get("id") is not None:
+                stubs.append(node)
+        return stubs
+
+    @staticmethod
+    def jockey_extras_events(payload: Any) -> list[dict[str, Any]]:
+        return SportsbetClient.extras_events(payload, "jockey")
+
+    @staticmethod
+    def challenge_events(payload: Any) -> list[dict[str, Any]]:
+        """Event stubs that look like Jockey Challenge (most-wins) markets.
+
+        No live Sportsbet Jockey Challenge has been observed yet; this
+        matches defensively on the word "challenge" and reports what exists.
+        """
+        stubs = []
+        for node in _walk_dicts(payload):
+            comp = str(node.get("competitionName") or "")
+            name = str(node.get("name") or "")
+            text = f"{comp} {name}".lower()
+            if "jockey" in text and "challenge" in text and node.get("id") is not None:
                 stubs.append(node)
         return stubs
 
@@ -316,54 +357,135 @@ class SportsbetClient:
             return name.split(" - ", 1)[1].strip() or None
         return None
 
-    def discover_jockey_megabets(self) -> list[MegabetOffer]:
-        """Find Jockey Megabet offers: listing stubs -> per-event racecards."""
+    def discover_megabet_offers(
+        self, kinds: tuple[str, ...] = ("jockey", "trainer")
+    ) -> list[MegabetOffer]:
+        """Find Extras offers for each kind: listing stubs -> event racecards."""
         result = self.fetch_megabets_raw()
         payload = result.json()
-        stubs = self.jockey_extras_events(payload)
-        log.info("sportsbet: %d Jockey Extras events in Megabets listing", len(stubs))
 
         offers: list[MegabetOffer] = []
+        for kind in kinds:
+            stubs = self.extras_events(payload, kind)
+            log.info(
+                "sportsbet: %d %s Extras events in Megabets listing", len(stubs), kind
+            )
+            for stub in stubs:
+                event_id = str(stub["id"])
+                try:
+                    card = self.client.get_json(_url("racecard", event_id=event_id))
+                except SourceUnavailableError as exc:
+                    log.error(
+                        "sportsbet: %s Extras racecard %s failed: %s", kind, event_id, exc
+                    )
+                    continue
+                stub_offers = self.parse_megabets(
+                    card.json(), fetched_at=card.fetched_at, market_type=kind
+                )
+                meeting_name = self._stub_meeting_name(stub)
+                start = _to_dt(stub.get("startTime"))
+                for o in stub_offers:
+                    o.meeting_name = o.meeting_name or meeting_name
+                    o.meeting_source_id = o.meeting_source_id or event_id
+                    o.meeting_date = o.meeting_date or (start.date() if start else None)
+                    o.raw_sha256 = card.sha256
+                if not stub_offers:
+                    log.warning(
+                        "sportsbet: %s Extras event %s (%s) yielded no parseable "
+                        "markets — raw payload archived at %s",
+                        kind, event_id, stub.get("name"), card.archive_path,
+                    )
+                offers.extend(stub_offers)
+
+        if "jockey" in kinds:
+            # Fallback for the older layout where markets sat in the listing.
+            inline = self.parse_megabets(payload, fetched_at=result.fetched_at)
+            for o in inline:
+                o.raw_sha256 = result.sha256
+            offers.extend(inline)
+
+        deduped: list[MegabetOffer] = []
+        seen: set[tuple[str, str, str, int]] = set()
+        for o in offers:
+            key = (o.market_type, o.jockey_name.lower(),
+                   (o.meeting_name or "").lower(), o.threshold)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(o)
+        for kind in kinds:
+            n = sum(1 for o in deduped if o.market_type == kind)
+            log.info("sportsbet: %d %s megabet offers discovered", n, kind)
+        return deduped
+
+    def discover_jockey_megabets(self) -> list[MegabetOffer]:
+        return self.discover_megabet_offers(kinds=("jockey",))
+
+    def discover_jockey_challenges(self) -> list["ChallengeOffer"]:
+        """Find Jockey Challenge (most-wins) offers, if Sportsbet lists any.
+
+        Never observed live yet — this reports honestly on whatever the
+        listing currently contains and returns [] when there is none.
+        """
+        result = self.fetch_megabets_raw()
+        stubs = self.challenge_events(result.json())
+        log.info("sportsbet: %d Jockey Challenge events in Megabets listing", len(stubs))
+        offers: list[ChallengeOffer] = []
         for stub in stubs:
             event_id = str(stub["id"])
             try:
                 card = self.client.get_json(_url("racecard", event_id=event_id))
             except SourceUnavailableError as exc:
-                log.error("sportsbet: Jockey Extras racecard %s failed: %s", event_id, exc)
+                log.error("sportsbet: challenge racecard %s failed: %s", event_id, exc)
                 continue
-            stub_offers = self.parse_megabets(card.json(), fetched_at=card.fetched_at)
             meeting_name = self._stub_meeting_name(stub)
             start = _to_dt(stub.get("startTime"))
-            for o in stub_offers:
-                o.meeting_name = o.meeting_name or meeting_name
-                o.meeting_source_id = o.meeting_source_id or event_id
-                o.meeting_date = o.meeting_date or (start.date() if start else None)
-                o.raw_sha256 = card.sha256
-            if not stub_offers:
+            found = 0
+            for node in _walk_dicts(card.json()):
+                mname = _first(node, "name", "marketName")
+                sels = node.get("selections")
+                if not (isinstance(mname, str) and isinstance(sels, list)):
+                    continue
+                for sel in sels:
+                    if not isinstance(sel, dict):
+                        continue
+                    sel_name = _first(sel, "name", "selectionName")
+                    if not isinstance(sel_name, str) or not sel_name.strip():
+                        continue
+                    # Challenge selections are competitor names, not
+                    # threshold phrases.
+                    if parse_selection_threshold(sel_name) is not None:
+                        continue
+                    price = _extract_price(sel)
+                    if price is None:
+                        continue
+                    offers.append(ChallengeOffer(
+                        source=SOURCE,
+                        market_id=str(_first(node, "marketId", "id", default="")),
+                        selection_id=str(_first(sel, "id", "selectionId", default="")),
+                        meeting_name=meeting_name,
+                        meeting_source_id=event_id,
+                        meeting_date=start.date() if start else None,
+                        competitor=sel_name.strip(),
+                        odds=price,
+                        market_name=str(stub.get("name") or mname),
+                        fetched_at=card.fetched_at,
+                        raw_sha256=card.sha256,
+                    ))
+                    found += 1
+            if not found:
                 log.warning(
-                    "sportsbet: Jockey Extras event %s (%s) yielded no parseable "
-                    "markets — raw payload archived at %s",
+                    "sportsbet: challenge event %s (%s) yielded no priced "
+                    "competitors — raw payload archived at %s",
                     event_id, stub.get("name"), card.archive_path,
                 )
-            offers.extend(stub_offers)
+        return offers
 
-        # Fallback for the older layout where markets sat in the listing itself.
-        inline = self.parse_megabets(payload, fetched_at=result.fetched_at)
-        for o in inline:
-            o.raw_sha256 = result.sha256
-        offers.extend(inline)
-
-        deduped: list[MegabetOffer] = []
-        seen: set[tuple[str, str, int]] = set()
-        for o in offers:
-            key = (o.jockey_name.lower(), (o.meeting_name or "").lower(), o.threshold)
-            if key not in seen:
-                seen.add(key)
-                deduped.append(o)
-        log.info("sportsbet: %d jockey megabet offers discovered", len(deduped))
-        return deduped
-
-    def parse_megabets(self, payload: Any, fetched_at: datetime | None = None) -> list[MegabetOffer]:
+    def parse_megabets(
+        self,
+        payload: Any,
+        fetched_at: datetime | None = None,
+        market_type: str = "jockey",
+    ) -> list[MegabetOffer]:
         """Parse the Megabets payload into Jockey Megabet offers.
 
         Strategy: walk the whole document; any dict that has a market-like
@@ -385,11 +507,12 @@ class SportsbetClient:
             parsed = parse_jockey_threshold(name)
 
             # Case C (live schema 2026-08-22): the market is named after the
-            # jockey ("Blake Shinn") and each selection name carries only the
-            # threshold ("To Ride Two or More Winners"). The shape itself is
-            # the signal — a market whose selections parse as bare thresholds
-            # is a jockey market; no name heuristics needed.
-            if isinstance(selections, list) and not _NOT_JOCKEY.search(name):
+            # entity ("Blake Shinn" / a trainer) and each selection name
+            # carries only the threshold ("To Ride Two or More Winners").
+            # The shape itself is the signal — a market whose selections
+            # parse as bare thresholds is an entity market.
+            not_entity = _NOT_ENTITY.get(market_type, _NOT_JOCKEY)
+            if isinstance(selections, list) and not not_entity.search(name):
                 matched_any = False
                 for sel in selections:
                     if not isinstance(sel, dict):
@@ -407,7 +530,7 @@ class SportsbetClient:
                         continue
                     offers.append(
                         self._offer(node, sel, f"{name.strip()} - {sel_name.strip()}",
-                                    name.strip(), k, price, fetched_at)
+                                    name.strip(), k, price, fetched_at, market_type)
                     )
                     matched_any = True
                 if matched_any:
@@ -424,7 +547,8 @@ class SportsbetClient:
                     if price is None:
                         continue
                     offers.append(
-                        self._offer(node, sel, name, jockey, k, price, fetched_at)
+                        self._offer(node, sel, name, jockey, k, price, fetched_at,
+                                    market_type)
                     )
                     break
                 continue
@@ -455,7 +579,8 @@ class SportsbetClient:
                         continue
                     jockey, k = sparsed
                     offers.append(
-                        self._offer(node, sel, sel_name, jockey, k, price, fetched_at)
+                        self._offer(node, sel, sel_name, jockey, k, price, fetched_at,
+                                    market_type)
                     )
 
         deduped: list[MegabetOffer] = []
@@ -482,6 +607,7 @@ class SportsbetClient:
         threshold: int,
         price: float,
         fetched_at: datetime,
+        market_type: str = "jockey",
     ) -> MegabetOffer:
         meeting_name = _first(market, "meetingName", "venueName", "competitionName", "venue")
         event_id = _first(market, "eventId", "raceEventId", "linkedEventId")
@@ -507,6 +633,7 @@ class SportsbetClient:
             market_name=market_name,
             fetched_at=fetched_at,
             market_status=str(status).lower(),
+            market_type=market_type,
         )
 
     # -- Phase 2/3: meetings and racecards ------------------------------
@@ -610,6 +737,9 @@ class SportsbetClient:
             jockey = _first(node, "jockeyName", "jockey", "riderName", "rider")
             if isinstance(jockey, dict):
                 jockey = _first(jockey, "name", "fullName")
+            trainer = _first(node, "trainerName", "trainer")
+            if isinstance(trainer, dict):
+                trainer = _first(trainer, "name", "fullName")
             saddle = _first(node, "runnerNumber", "saddlecloth", "number", "barrierNumber")
             price = _extract_price(node)
             rstatus = _runner_status(node)
@@ -625,6 +755,7 @@ class SportsbetClient:
                     horse_name=horse.strip(),
                     saddlecloth=int(saddle) if isinstance(saddle, (int, float)) else None,
                     jockey_name=str(jockey).strip() if jockey else None,
+                    trainer_name=str(trainer).strip() if trainer else None,
                     status=rstatus,
                     win_odds=price,
                     odds_timestamp=fetched_at if price else None,

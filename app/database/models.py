@@ -110,8 +110,10 @@ class MegabetMarket(Base):
     meeting_name: Mapped[str | None] = mapped_column(String(128))
     meeting_date: Mapped[date | None] = mapped_column(Date)
     jockey: Mapped[str] = mapped_column(String(128))
+    # k in "k+ wins"; 0 means a most-wins challenge market.
     threshold: Mapped[int] = mapped_column(Integer)
     source_market_name: Mapped[str] = mapped_column(String(256))
+    market_type: Mapped[str] = mapped_column(String(16), default="jockey")
     possible_void_on_jockey_change: Mapped[bool] = mapped_column(Boolean, default=False)
 
 

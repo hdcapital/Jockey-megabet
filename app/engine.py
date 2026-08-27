@@ -19,10 +19,15 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+import re
+
 from app.config import Settings, get_settings
 from app.matching.jockeys import JockeyRideCard, find_rides
 from app.matching.meetings import find_betfair_market
+from app.matching.names import jockey_names_match, normalize_name
 from app.matching.runners import match_race_runners
+from app.matching.trainers import TrainerCard, find_trainer_entries
+from app.models.challenge import simulate_most_wins
 from app.models.consensus import ConsensusResult, SourceProbability, consensus
 from app.models.devig import DevigResult, devig
 from app.models.poisson_binomial import (
@@ -30,7 +35,7 @@ from app.models.poisson_binomial import (
     fair_odds,
     poisson_binomial,
 )
-from app.sources.base import MegabetOffer, RaceInfo
+from app.sources.base import ChallengeOffer, MegabetOffer, RaceInfo
 from app.sources.betfair import BetfairMarket
 
 log = logging.getLogger(__name__)
@@ -63,7 +68,7 @@ class RideProbability:
 @dataclass
 class MegabetValuation:
     offer: MegabetOffer
-    ride_card: JockeyRideCard
+    ride_card: "JockeyRideCard | TrainerCard"
     rides: list[RideProbability]
     model: str
     fair_probability: float | None
@@ -154,6 +159,48 @@ def build_ride_probabilities(
     return out
 
 
+def build_trainer_race_probabilities(
+    card: TrainerCard, settings: Settings
+) -> list[RideProbability]:
+    """Per-race win probability for a trainer: sum of their runners' fair
+    probabilities within the race (exact — race winners are mutually
+    exclusive). If any of the trainer's active runners lacks a fair price,
+    the race is marked unavailable rather than partially summed."""
+    weights = {
+        "betfair": settings.consensus_weight_betfair,
+        "sportsbet": settings.consensus_weight_sportsbet,
+    }
+    out: list[RideProbability] = []
+    for entry in card.rides:
+        race = entry.race
+        dv = price_race_sportsbet(race, settings.devig_method)
+        p = None
+        if dv is not None:
+            active = [r for r in race.active_runners() if r.win_odds and r.win_odds > 1.0]
+            fair_by_id = {r.source_id: dv.fair_probabilities[i] for i, r in enumerate(active)}
+            vals = [fair_by_id[r.source_id] for r in entry.runners if r.source_id in fair_by_id]
+            if len(vals) == len(entry.runners) and vals:
+                p = min(1.0, sum(vals))
+        rp = RideProbability(
+            race=race,
+            horse_name=", ".join(r.horse_name for r in entry.runners),
+            sportsbet_odds=None,
+            sportsbet_fair_p=p,
+            devig=dv,
+            betfair_detail="Betfair aggregation not modelled for trainer markets",
+        )
+        rp.consensus = consensus(
+            [
+                SourceProbability("betfair", None, False, rp.betfair_detail),
+                SourceProbability("sportsbet", p, True,
+                                  "" if p is not None else "unpriceable race"),
+            ],
+            weights,
+        )
+        out.append(rp)
+    return out
+
+
 def assess_quality(
     card: JockeyRideCard, rides: list[RideProbability], model: str,
     settings: Settings, now: datetime,
@@ -213,16 +260,20 @@ def value_offer(
     now = now or datetime.now(timezone.utc)
     cache_key = (normalize_name(offer.meeting_name or ""),
                  normalize_name(offer.jockey_name))
+    cache_key = (offer.market_type,) + cache_key
     cached = ride_cache.get(cache_key) if ride_cache is not None else None
     if cached is not None:
         card, rides = cached
+    elif offer.market_type == "trainer":
+        card = find_trainer_entries(offer.jockey_name, races)
+        rides = build_trainer_race_probabilities(card, settings)
     else:
         card = find_rides(offer.jockey_name, races)
         rides = build_ride_probabilities(
             card, offer.meeting_name or "", settings, betfair_markets
         )
-        if ride_cache is not None:
-            ride_cache[cache_key] = (card, rides)
+    if ride_cache is not None and cached is None:
+        ride_cache[cache_key] = (card, rides)
 
     valuations: list[MegabetValuation] = []
     per_model_fair_odds: dict[str, float | None] = {}
@@ -254,4 +305,128 @@ def value_offer(
         )
     for v in valuations:
         v.alt_fair_odds = dict(per_model_fair_odds)
+    return valuations
+
+
+# ---------------------------------------------------------------------------
+# Jockey Challenge (most wins at the meeting)
+# ---------------------------------------------------------------------------
+
+CHALLENGE_MODEL = "mc_most_wins"
+CHALLENGE_SETTLEMENT_NOTE = (
+    "assumes settlement = most winners with dead-heats divided; "
+    "verify against Sportsbet's challenge rules (points systems differ)"
+)
+_ANY_OTHER = re.compile(r"\bany\s+other\b", re.I)
+
+
+@dataclass
+class ChallengeValuation:
+    offer: ChallengeOffer
+    fair_probability: float | None
+    fair_odds: float | None
+    expected_return: float | None
+    quality: str
+    quality_detail: str
+    n_races: int
+    computed_at: datetime
+    model: str = CHALLENGE_MODEL
+    n_sims: int = 0
+    seed: int = 0
+
+
+def value_challenges(
+    offers: list[ChallengeOffer],
+    races_by_meeting: dict[str, list[RaceInfo]],
+    settings: Settings | None = None,
+    now: datetime | None = None,
+) -> list[ChallengeValuation]:
+    """Fair-value most-wins challenge offers by simulating each meeting.
+
+    Every jockey riding at the meeting is simulated (not just the priced
+    competitors), so listed jockeys are correctly penalised by the whole
+    field; "Any Other" style selections get the aggregate probability of
+    all unlisted jockeys.
+    """
+    settings = settings or get_settings()
+    now = now or datetime.now(timezone.utc)
+    valuations: list[ChallengeValuation] = []
+
+    by_meeting: dict[str, list[ChallengeOffer]] = {}
+    for o in offers:
+        by_meeting.setdefault(normalize_name(o.meeting_name or ""), []).append(o)
+
+    for meeting_key, offs in by_meeting.items():
+        races = [
+            r for r in races_by_meeting.get(meeting_key, []) if r.status != "abandoned"
+        ]
+        race_probs: list[dict[str, float]] = []
+        unpriceable = 0
+        for race in races:
+            dv = price_race_sportsbet(race, settings.devig_method)
+            if dv is None:
+                unpriceable += 1
+                continue
+            active = [r for r in race.active_runners() if r.win_odds and r.win_odds > 1.0]
+            rp: dict[str, float] = {}
+            for i, runner in enumerate(active):
+                if runner.jockey_name:
+                    key = normalize_name(runner.jockey_name)
+                    rp[key] = rp.get(key, 0.0) + dv.fair_probabilities[i]
+            if rp:
+                race_probs.append(rp)
+
+        if not race_probs:
+            for o in offs:
+                valuations.append(ChallengeValuation(
+                    offer=o, fair_probability=None, fair_odds=None,
+                    expected_return=None, quality="LOW",
+                    quality_detail="no priceable races for this meeting",
+                    n_races=0, computed_at=now,
+                ))
+            continue
+
+        result = simulate_most_wins(race_probs)
+        problems: list[str] = []
+        if unpriceable:
+            problems.append(f"{unpriceable} race(s) unpriceable (already run?)")
+
+        named_offs = [o for o in offs if not _ANY_OTHER.search(o.competitor)]
+        matched_keys: set[str] = set()
+        probs_by_offer: dict[int, float | None] = {}
+        for o in named_offs:
+            hits = [k for k in result.probabilities
+                    if jockey_names_match(o.competitor, k)]
+            if len(hits) == 1:
+                probs_by_offer[id(o)] = result.probabilities[hits[0]]
+                matched_keys.add(hits[0])
+            else:
+                probs_by_offer[id(o)] = None
+                log.warning(
+                    "challenge competitor %r: %d matching jockeys in simulation",
+                    o.competitor, len(hits),
+                )
+        any_other_p = (
+            sum(p for k, p in result.probabilities.items() if k not in matched_keys)
+            + result.other_probability
+        )
+
+        for o in offs:
+            if _ANY_OTHER.search(o.competitor):
+                p = any_other_p
+                detail_extra = "aggregate of unlisted jockeys"
+            else:
+                p = probs_by_offer.get(id(o))
+                detail_extra = "" if p is not None else "competitor not matched to a simulated jockey"
+            fo = fair_odds(p) if p else None
+            er = expected_return(p, o.odds) if p else None
+            local = problems + ([detail_extra] if detail_extra else [])
+            quality = "LOW" if (p is None or problems) else "MEDIUM"
+            valuations.append(ChallengeValuation(
+                offer=o, fair_probability=p, fair_odds=fo, expected_return=er,
+                quality=quality,
+                quality_detail="; ".join(local + [CHALLENGE_SETTLEMENT_NOTE]),
+                n_races=len(race_probs), computed_at=now,
+                n_sims=result.n_sims, seed=result.seed,
+            ))
     return valuations

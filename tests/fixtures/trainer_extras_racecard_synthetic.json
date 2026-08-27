@@ -1,0 +1,52 @@
+{
+  "_fixture_note": "SYNTHETIC TEST FIXTURE — invented names/prices mirroring the observed Extras event shape for TRAINER markets (markets named after trainers, threshold selections, winPrice under prices[priceCode=L]). The live trainer selection wording is unverified; the parser accepts To Train/To Have/To Saddle variants and this fixture exercises them. NOT real market data; never production output.",
+  "id": 111002,
+  "className": "Racing Extras",
+  "competitionId": 23551,
+  "competitionName": "Trainer Extras",
+  "startTime": 1787365800,
+  "bettingStatus": "PRICED",
+  "name": "Trainer Extras - Testville",
+  "displayName": "Trainer Extras",
+  "statusCode": "A",
+  "classId": 161,
+  "markets": [
+    {
+      "id": 991001,
+      "name": "Tessa Trainer",
+      "statusCode": "A",
+      "selections": [
+        {
+          "id": 881001,
+          "name": "To Train One or More Winners",
+          "isOut": false,
+          "prices": [{"priceCode": "L", "winPrice": 1.9}],
+          "statusCode": "A"
+        },
+        {
+          "id": 881002,
+          "name": "To Have Two or More Winners",
+          "isOut": false,
+          "prices": [{"priceCode": "L", "winPrice": 8.0}],
+          "statusCode": "A"
+        }
+      ]
+    },
+    {
+      "id": 991002,
+      "name": "Sam Saddler",
+      "statusCode": "A",
+      "selections": [
+        {
+          "id": 881003,
+          "name": "To Saddle Two or More Winners",
+          "isOut": false,
+          "prices": [{"priceCode": "L", "winPrice": 4.2}],
+          "statusCode": "A"
+        }
+      ]
+    }
+  ],
+  "results": [],
+  "deductions": []
+}

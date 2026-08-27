@@ -31,7 +31,23 @@ def get_engine(url: str | None = None):
 def init_db(url: str | None = None):
     engine = get_engine(url)
     m.Base.metadata.create_all(engine)
+    _migrate(engine)
     return engine
+
+
+def _migrate(engine) -> None:
+    """Minimal additive migrations for databases created by older versions."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    cols = {c["name"] for c in inspector.get_columns("megabet_markets")}
+    if "market_type" not in cols:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE megabet_markets "
+                "ADD COLUMN market_type VARCHAR(16) DEFAULT 'jockey'"
+            ))
+        log.info("db migration: added megabet_markets.market_type")
 
 
 def session_factory(url: str | None = None) -> sessionmaker[Session]:
@@ -107,7 +123,7 @@ class Repository:
 
     def upsert_megabet(self, source: str, source_market_id: str, meeting_row,
                        meeting_name, meeting_date, jockey: str, threshold: int,
-                       market_name: str) -> m.MegabetMarket:
+                       market_name: str, market_type: str = "jockey") -> m.MegabetMarket:
         row = self.s.scalar(
             select(m.MegabetMarket).where(
                 m.MegabetMarket.source == source,
@@ -122,6 +138,7 @@ class Repository:
                 meeting_id=meeting_row.meeting_id if meeting_row else None,
                 meeting_name=meeting_name, meeting_date=meeting_date,
                 jockey=jockey, threshold=threshold, source_market_name=market_name,
+                market_type=market_type,
             )
             self.s.add(row)
             self.s.flush()
