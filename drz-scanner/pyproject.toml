@@ -1,0 +1,13 @@
+[project]
+name = "drz-scanner"
+version = "1.0.0"
+description = "Dr Z place-value scanner for Australian thoroughbreds (display only)"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "data: needs the Betfair historical CSVs (network on first run, ~80 MB cached)",
+    "live: needs a network that can reach sportsbet.com.au",
+]
+filterwarnings = ["ignore::DeprecationWarning"]

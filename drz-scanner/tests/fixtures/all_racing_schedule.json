@@ -1,0 +1,74 @@
+{
+ "_fixture_note": "SYNTHETIC TEST FIXTURE \u2014 invented names and prices in the LIVE-VERIFIED (2026-08-22) Sportsbet racecard shape. The `placePrice` field name inside the priceCode=L entry is NOT live-verified; see BUILD_STATUS.md. NOT real market data; never production output.",
+ "dates": [
+  {
+   "meetingDate": "2026-09-18",
+   "sections": [
+    {
+     "raceType": "Horses",
+     "meetings": [
+      {
+       "id": 5701,
+       "name": "Fixtureville",
+       "className": "Horses - Aus/NZ",
+       "stateCode": "VIC",
+       "events": [
+        {
+         "id": 900101,
+         "raceNumber": 4,
+         "startTime": 1789000000,
+         "name": "R4 Fixture Handicap",
+         "statusCode": "A",
+         "bettingStatus": "PRICED"
+        },
+        {
+         "id": 900104,
+         "raceNumber": 7,
+         "startTime": 1788990000,
+         "name": "R7 Dead Heat",
+         "statusCode": "R",
+         "bettingStatus": "RESULTED",
+         "result": "2,5,3,9"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "raceType": "Greyhounds",
+     "meetings": [
+      {
+       "id": 5702,
+       "name": "Dogtown",
+       "className": "Greyhounds",
+       "events": [
+        {
+         "id": 910001,
+         "raceNumber": 1,
+         "statusCode": "A"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "raceType": "Harness",
+     "meetings": [
+      {
+       "id": 5703,
+       "name": "Trotsville",
+       "className": "Harness",
+       "events": [
+        {
+         "id": 920001,
+         "raceNumber": 1,
+         "statusCode": "A"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

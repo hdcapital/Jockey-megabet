@@ -1,0 +1,139 @@
+{
+  "version": "lamtau-20260918-n44856",
+  "lam": 0.71,
+  "tau": 0.7,
+  "fitted_on": "2026-09-18",
+  "n_races": 44856,
+  "date_range": [
+    "2024-01-01",
+    "2026-08-31"
+  ],
+  "out_of_sample": {
+    "n_races": 16737,
+    "logloss_model": 0.499708,
+    "logloss_model_uncorrected": 0.499882,
+    "logloss_plain_harville": 0.506184,
+    "logloss_place_bsp_implied": 0.49919,
+    "bsp_win_exponent": 1.0125,
+    "bucket_correction_adopted": true,
+    "free_fit_lam": 0.7032,
+    "free_fit_tau": 0.7076
+  },
+  "calibration_table": [
+    {
+      "bucket_lo": 0.0,
+      "bucket_hi": 0.05,
+      "n": 16051,
+      "predicted": 0.0289,
+      "actual": 0.0273
+    },
+    {
+      "bucket_lo": 0.05,
+      "bucket_hi": 0.1,
+      "n": 16089,
+      "predicted": 0.0744,
+      "actual": 0.0751
+    },
+    {
+      "bucket_lo": 0.1,
+      "bucket_hi": 0.2,
+      "n": 30115,
+      "predicted": 0.149,
+      "actual": 0.1534
+    },
+    {
+      "bucket_lo": 0.2,
+      "bucket_hi": 0.3,
+      "n": 26793,
+      "predicted": 0.2507,
+      "actual": 0.2492
+    },
+    {
+      "bucket_lo": 0.3,
+      "bucket_hi": 0.4,
+      "n": 23663,
+      "predicted": 0.3475,
+      "actual": 0.3456
+    },
+    {
+      "bucket_lo": 0.4,
+      "bucket_hi": 0.5,
+      "n": 17208,
+      "predicted": 0.4476,
+      "actual": 0.4496
+    },
+    {
+      "bucket_lo": 0.5,
+      "bucket_hi": 0.6,
+      "n": 13262,
+      "predicted": 0.5468,
+      "actual": 0.5436
+    },
+    {
+      "bucket_lo": 0.6,
+      "bucket_hi": 0.7,
+      "n": 8677,
+      "predicted": 0.6462,
+      "actual": 0.6485
+    },
+    {
+      "bucket_lo": 0.7,
+      "bucket_hi": 0.8,
+      "n": 5363,
+      "predicted": 0.7453,
+      "actual": 0.7404
+    },
+    {
+      "bucket_lo": 0.8,
+      "bucket_hi": 0.9,
+      "n": 3012,
+      "predicted": 0.8434,
+      "actual": 0.8347
+    },
+    {
+      "bucket_lo": 0.9,
+      "bucket_hi": 1.0,
+      "n": 620,
+      "predicted": 0.9247,
+      "actual": 0.9355
+    }
+  ],
+  "win_prob_bucket_correction": [
+    {
+      "lo": 0.0,
+      "hi": 0.02,
+      "delta": -0.004582
+    },
+    {
+      "lo": 0.02,
+      "hi": 0.05,
+      "delta": -0.001239
+    },
+    {
+      "lo": 0.05,
+      "hi": 0.1,
+      "delta": 0.008589
+    },
+    {
+      "lo": 0.1,
+      "hi": 0.2,
+      "delta": 0.003165
+    },
+    {
+      "lo": 0.2,
+      "hi": 0.3,
+      "delta": -0.004644
+    },
+    {
+      "lo": 0.3,
+      "hi": 0.5,
+      "delta": -0.008821
+    },
+    {
+      "lo": 0.5,
+      "hi": 1.01,
+      "delta": -0.027001
+    }
+  ],
+  "provenance": "Fitted by maximum likelihood on Betfair Australia historical BSP (betfair-datascientists ANZ_Thoroughbreds), thoroughbreds only, New Zealand excluded, every runner priced, exactly one winner, 2 or 3 placed runners including the winner, 5+ runners. Trained on meetings before the final 365 days, tested on the final window. Reproduce with `python -m app.calibrate`. Shipped lam/tau are pinned to 0.71/0.7; the unconstrained fit on this data gave 0.7032/0.7076. The likelihood surface is flat between them, so the rounder numbers are shipped for legibility."
+}

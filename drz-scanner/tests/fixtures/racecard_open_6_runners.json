@@ -1,0 +1,181 @@
+{
+ "_fixture_note": "SYNTHETIC TEST FIXTURE \u2014 invented names and prices in the LIVE-VERIFIED (2026-08-22) Sportsbet racecard shape. The `placePrice` field name inside the priceCode=L entry is NOT live-verified; see BUILD_STATUS.md. NOT real market data; never production output.",
+ "id": 900102,
+ "raceNumber": 5,
+ "competitionId": 5701,
+ "competitionName": "Fixtureville",
+ "country": "Australia",
+ "startTime": 1789000000,
+ "bettingStatus": "PRICED",
+ "name": "R5 Small Field",
+ "statusCode": "A",
+ "type": "horse",
+ "markets": [
+  {
+   "id": 550101,
+   "name": "Win or Place",
+   "numPlaces": 2,
+   "statusCode": "A",
+   "selections": [
+    {
+     "id": 440001,
+     "name": "Ten Bagger",
+     "runnerNumber": 1,
+     "drawNumber": 1,
+     "jockey": "A Rider",
+     "trainer": "Trainer 1",
+     "isOut": false,
+     "prices": [
+      {
+       "priceCode": "MDP",
+       "winPrice": 2.7
+      },
+      {
+       "priceCode": "TMD",
+       "winPrice": 2.78
+      },
+      {
+       "priceCode": "L",
+       "winPrice": 2.6,
+       "placePrice": 1.35
+      }
+     ],
+     "result": "-",
+     "statusCode": "A"
+    },
+    {
+     "id": 440002,
+     "name": "Second Wind",
+     "runnerNumber": 2,
+     "drawNumber": 2,
+     "jockey": "B Hoop",
+     "trainer": "Trainer 2",
+     "isOut": false,
+     "prices": [
+      {
+       "priceCode": "MDP",
+       "winPrice": 4.37
+      },
+      {
+       "priceCode": "TMD",
+       "winPrice": 4.49
+      },
+      {
+       "priceCode": "L",
+       "winPrice": 4.2,
+       "placePrice": 1.7
+      }
+     ],
+     "result": "-",
+     "statusCode": "A"
+    },
+    {
+     "id": 440003,
+     "name": "Third Rail",
+     "runnerNumber": 3,
+     "drawNumber": 3,
+     "jockey": "C Pilot",
+     "trainer": "Trainer 3",
+     "isOut": false,
+     "prices": [
+      {
+       "priceCode": "MDP",
+       "winPrice": 6.24
+      },
+      {
+       "priceCode": "TMD",
+       "winPrice": 6.42
+      },
+      {
+       "priceCode": "L",
+       "winPrice": 6.0,
+       "placePrice": 2.1
+      }
+     ],
+     "result": "-",
+     "statusCode": "A"
+    },
+    {
+     "id": 440004,
+     "name": "Fourth Estate",
+     "runnerNumber": 4,
+     "drawNumber": 4,
+     "jockey": "D Steer",
+     "trainer": "Trainer 4",
+     "isOut": false,
+     "prices": [
+      {
+       "priceCode": "MDP",
+       "winPrice": 8.84
+      },
+      {
+       "priceCode": "TMD",
+       "winPrice": 9.1
+      },
+      {
+       "priceCode": "L",
+       "winPrice": 8.5,
+       "placePrice": 2.6
+      }
+     ],
+     "result": "-",
+     "statusCode": "A"
+    },
+    {
+     "id": 440005,
+     "name": "Fifth Avenue",
+     "runnerNumber": 5,
+     "drawNumber": 5,
+     "jockey": "E Jock",
+     "trainer": "Trainer 5",
+     "isOut": false,
+     "prices": [
+      {
+       "priceCode": "MDP",
+       "winPrice": 11.44
+      },
+      {
+       "priceCode": "TMD",
+       "winPrice": 11.77
+      },
+      {
+       "priceCode": "L",
+       "winPrice": 11.0,
+       "placePrice": 3.1
+      }
+     ],
+     "result": "-",
+     "statusCode": "A"
+    },
+    {
+     "id": 440006,
+     "name": "Sixth Sense",
+     "runnerNumber": 6,
+     "drawNumber": 6,
+     "jockey": "F Rider",
+     "trainer": "Trainer 6",
+     "isOut": false,
+     "prices": [
+      {
+       "priceCode": "MDP",
+       "winPrice": 15.6
+      },
+      {
+       "priceCode": "TMD",
+       "winPrice": 16.05
+      },
+      {
+       "priceCode": "L",
+       "winPrice": 15.0,
+       "placePrice": 3.8
+      }
+     ],
+     "result": "-",
+     "statusCode": "A"
+    }
+   ]
+  }
+ ],
+ "results": [],
+ "deductions": []
+}
