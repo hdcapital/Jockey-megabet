@@ -20,6 +20,7 @@ import logging
 import sys
 import time
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 from app.calibration import load_calibration
 from app.config import get_settings
@@ -37,6 +38,18 @@ from app.sources.betfair import (
 from app.sources.sportsbet import SportsbetClient
 
 log = logging.getLogger("app.drz")
+
+#: Sportsbet's racing day is the Australian calendar day, not the UTC one.
+#: AEST is UTC+10 and AEDT UTC+11, so for the first ten or eleven hours of
+#: every Australian day the UTC date is still yesterday — a scanner keyed on
+#: the UTC date would spend every Australian morning fetching the wrong day's
+#: schedule entirely.
+RACING_TZ = ZoneInfo("Australia/Sydney")
+
+
+def racing_today() -> date:
+    """Today's date in the Australian racing timezone."""
+    return datetime.now(RACING_TZ).date()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -70,17 +83,35 @@ def _apply_overrides(settings, args) -> None:
         settings.max_win_odds = args.max_win_odds
 
 
+def _matches_filters(stub: RaceStub, args) -> bool:
+    if args.meeting and args.meeting.lower() not in stub.meeting_name.lower():
+        return False
+    if args.race is not None and stub.race_number != args.race:
+        return False
+    return True
+
+
 def select_stubs(stubs: list[RaceStub], args) -> list[RaceStub]:
-    out = [s for s in stubs if s.is_open]
-    if args.meeting:
-        needle = args.meeting.lower()
-        out = [s for s in out if needle in s.meeting_name.lower()]
-    if args.race is not None:
-        out = [s for s in out if s.race_number == args.race]
+    """Open races to value, ordered by time to the jump."""
+    out = [s for s in stubs if s.is_open and _matches_filters(s, args)]
     return sorted(
         out,
         key=lambda s: (s.start_time is None, s.start_time or datetime.max.replace(tzinfo=timezone.utc)),
     )
+
+
+def select_resulted_stubs(stubs: list[RaceStub], args) -> list[RaceStub]:
+    """Races that have resolved and carry a result, for settlement capture.
+
+    These are deliberately *not* the races we value — they are the races we
+    valued earlier today and now need an outcome for. Without this pass
+    nothing ever writes a result, so the backtester can never settle a single
+    signal and the UNPROVEN banner can never come down.
+    """
+    return [
+        s for s in stubs
+        if not s.is_open and s.result and _matches_filters(s, args)
+    ]
 
 
 def _betfair_inputs(bf_markets, race, places):
@@ -128,10 +159,59 @@ def _betfair_inputs(bf_markets, race, places):
     return probs, reliable, delayed, place_probs
 
 
+def capture_results(stubs: list[RaceStub], sb: SportsbetClient, no_db: bool) -> int:
+    """Write outcomes for races we valued earlier and that have now resolved.
+
+    The schedule stub already carries the placings string, so the common case
+    costs no extra request. A racecard is fetched only for a race we hold
+    valuations for and whose per-runner finishing positions we still lack —
+    those positions are the only unambiguous way to settle a dead heat.
+    """
+    if no_db or not stubs:
+        return 0
+    from app.database.repository import Repository, session_factory
+
+    Session = session_factory()
+    captured = 0
+    with Session() as session:
+        repo = Repository(session)
+        for stub in stubs:
+            race_row = repo.race_by_source_id("sportsbet", stub.event_id)
+            if race_row is None:
+                continue  # never valued, so nothing to settle
+            if race_row.result_placings and repo.finish_positions(race_row.race_id):
+                continue  # already captured, positions and all
+            if not race_row.result_placings:
+                race_row.result_placings = stub.result
+                race_row.status = "resulted"
+                race_row.resulted_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                captured += 1
+            if not repo.finish_positions(race_row.race_id):
+                try:
+                    race = sb.fetch_racecard(stub.event_id)
+                except (SourceUnavailableError, SchemaMismatchError) as exc:
+                    log.warning(
+                        "result capture: racecard %s unavailable (%s); settling "
+                        "from the placings string alone", stub.event_id, exc,
+                    )
+                else:
+                    for runner in race.runners:
+                        repo.upsert_runner(race_row, runner)
+                    if race.result_placings:
+                        race_row.result_placings = ",".join(
+                            str(p) for p in race.result_placings
+                        )
+        session.commit()
+    if captured:
+        log.info("captured results for %d race(s)", captured)
+    return captured
+
+
 def scan_once(args, settings, calibration, sb: SportsbetClient, bf_markets=None):
     """One full pass. Returns ``(valuations_by_race, skipped_messages)``."""
-    for_date = args.date or datetime.now(timezone.utc).date()
+    for_date = args.date or racing_today()
     _meetings, stubs, _raw = sb.fetch_schedule(for_date)
+    capture_results(select_resulted_stubs(stubs, args), sb, args.no_db)
     selected = select_stubs(stubs, args)
     log.info("valuing %d open races", len(selected))
 
@@ -187,7 +267,13 @@ def _persist(race, valuations: list[PlaceValuation]) -> None:
                 source=race.source,
                 source_id=race.meeting_source_id or f"{race.source_id}-meeting",
                 venue=race.venue or "",
-                meeting_date=race.start_time.date() if race.start_time else None,
+                # The Australian calendar date, not the UTC one: this is the
+                # key the Betfair history joins on (LOCAL_MEETING_DATE), and
+                # an evening meeting is on the next UTC day.
+                meeting_date=(
+                    race.start_time.astimezone(RACING_TZ).date()
+                    if race.start_time else None
+                ),
             )
         )
         race_row = repo.upsert_race(meeting, race)
@@ -248,7 +334,7 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
     _apply_overrides(settings, args)
     calibration = load_calibration()
-    for_date = args.date or datetime.now(timezone.utc).date()
+    for_date = args.date or racing_today()
 
     bf_markets, bf_client = _betfair_markets(for_date)
     exit_code = 0

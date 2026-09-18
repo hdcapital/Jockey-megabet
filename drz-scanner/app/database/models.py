@@ -77,6 +77,9 @@ class Runner(Base):
     jockey_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     trainer_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     barrier: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Finishing position, written once the race resolves. Two runners on the
+    #: same position is the only unambiguous dead-heat signal.
+    finish_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class RunnerPrice(Base):
@@ -162,6 +165,9 @@ class PlaceValuation(Base):
     settled_return: Mapped[float | None] = mapped_column(Float, nullable=True)
     dead_heat_divisor: Mapped[float | None] = mapped_column(Float, nullable=True)
     deduction_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    #: "finish_positions" (dead heats resolved) or "placings_string" (they
+    #: could not be), so a report can say which evidence it rests on.
+    settlement_basis: Mapped[str | None] = mapped_column(String(24), nullable=True)
 
 
 class RawResponse(Base):

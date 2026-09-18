@@ -121,9 +121,14 @@ most exciting and are most wrong.
 
 ### 1. Schedule
 
-`AllRacing/{date}`, thoroughbreds only (`className` beginning "Horses"),
-open races only. A race is open when its `statusCode` is `A`, its betting
+`AllRacing/{date}` for the **Australian** calendar date (AEST/AEDT, not
+UTC — otherwise every Australian morning fetches yesterday's card),
+thoroughbreds only (`className` beginning "Horses"), open races only. A race is open when its `statusCode` is `A`, its betting
 status says nothing about being resolved, and it carries no `result`.
+
+Races that have resolved since an earlier scan get a separate settlement
+pass, which writes their outcome so stored signals can be settled. Without
+it the backtester would have nothing to work on, ever.
 
 ### 2. Win probabilities
 
@@ -234,6 +239,12 @@ throttle. Do not lower `HTTP_MIN_REQUEST_INTERVAL_SECONDS`.
 * **No backfill.** The backtester uses only observations captured live. A
   price you did not see at the time is not evidence about a signal you would
   have taken at the time.
+* **No inferred dead heats.** The race-level placings string is a finishing
+  order and cannot express a dead heat, so one is never guessed from its
+  length. Dead heats are resolved from per-runner finishing positions; where
+  those are missing, the first N placings are paid in full and the row is
+  marked `settlement_basis = "placings_string"` so the report can say which
+  evidence it rests on.
 
 ## Layout
 

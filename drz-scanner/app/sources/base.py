@@ -67,6 +67,10 @@ class RunnerInfo:
     trainer_name: str | None = None
     barrier: int | None = None
     status: str = "active"          # active | scratched
+    #: Finishing position from a resulted racecard, when the source gives one
+    #: per runner. Two runners sharing a position is a dead heat — the only
+    #: unambiguous way to detect one.
+    finish_position: int | None = None
     win_price: float | None = None   # price code L only
     place_price: float | None = None  # price code L only
     price_type: str = "fixed"

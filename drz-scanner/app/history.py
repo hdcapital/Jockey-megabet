@@ -166,6 +166,8 @@ class RaceArrays:
     won: np.ndarray        # (R, N)
     placed: np.ndarray     # (R, N)
     place_bsp: np.ndarray  # (R, N), NaN where absent
+    names: np.ndarray      # (R, N) selection names, "" where padded
+    tab_numbers: np.ndarray  # (R, N) TAB numbers, -1 where padded
     n_runners: np.ndarray  # (R,)
     places: np.ndarray     # (R,) 2 or 3
     dates: np.ndarray      # (R,) datetime64[D]
@@ -233,6 +235,10 @@ def prepare(df: pd.DataFrame, min_runners: int = 5) -> RaceArrays:
     won = np.zeros((n_races, max_n), dtype=bool)
     placed = np.zeros((n_races, max_n), dtype=bool)
     place_bsp = np.full((n_races, max_n), np.nan)
+    names = np.full((n_races, max_n), "", dtype=object)
+    tabs = np.full((n_races, max_n), -1, dtype=int)
+    names[row, col] = df["SELECTION_NAME"].astype(str).to_numpy()
+    tabs[row, col] = pd.to_numeric(df["TAB_NUMBER"], errors="coerce").fillna(-1).to_numpy()
     q[row, col] = 1.0 / df["WIN_BSP"].to_numpy()
     won[row, col] = df["won"].to_numpy()
     placed[row, col] = df["placed"].to_numpy()
@@ -249,6 +255,8 @@ def prepare(df: pd.DataFrame, min_runners: int = 5) -> RaceArrays:
         won=won,
         placed=placed,
         place_bsp=place_bsp,
+        names=names,
+        tab_numbers=tabs,
         n_runners=sizes,
         places=placed.sum(axis=1),
         dates=dates,
@@ -290,6 +298,8 @@ def load_history(
         won=arrays.won[sel],
         placed=arrays.placed[sel],
         place_bsp=arrays.place_bsp[sel],
+        names=arrays.names[sel],
+        tab_numbers=arrays.tab_numbers[sel],
         n_runners=arrays.n_runners[sel],
         places=arrays.places[sel],
         dates=arrays.dates[sel],

@@ -41,58 +41,117 @@ class Settlement:
     dead_heat_divisor: float
     gross_return: float
     deduction_status: str
+    basis: str
 
 
-def settle_runner(
-    saddlecloth: int | None, placings: list[int], places: int, place_price: float | None
+#: Settlement basis, stored so a backtest row can always say what it knew.
+BASIS_POSITIONS = "finish_positions"
+BASIS_PLACINGS = "placings_string"
+
+
+def settle_from_positions(
+    saddlecloth: int | None,
+    positions: dict[int, int],
+    places: int,
+    place_price: float | None,
 ) -> Settlement | None:
-    """Settle one runner against a race's stored placings.
+    """Settle from per-runner finishing positions — the unambiguous path.
 
-    ``placings`` is the source's own finishing order by saddlecloth. When it
-    lists exactly ``places`` runners there was no dead heat. When it lists
-    *more*, the surplus runners dead-heated for the final paying position:
-    three dividends listing four numbers means two runners tied for third.
-    Australian practice divides the dividend among the runners tying for a
-    position, so only those runners carry a divisor — the outright first and
-    second are paid in full.
+    A runner placed when its position is within the paying places. Two or
+    more runners sharing a position dead-heated for it, and Australian
+    practice divides that position's dividend among them, so the divisor is
+    the number of runners on the same position. Runners on an outright
+    position are paid in full.
+    """
+    if saddlecloth is None or not positions or place_price is None:
+        return None
+    pos = positions.get(saddlecloth)
+    if pos is None:
+        return None
+    if pos > places:
+        return Settlement(False, 1.0, 0.0, "unknown", BASIS_POSITIONS)
+    sharing = float(sum(1 for p in positions.values() if p == pos))
+    return Settlement(
+        placed=True,
+        dead_heat_divisor=sharing,
+        gross_return=place_price / sharing,
+        deduction_status="unknown",
+        basis=BASIS_POSITIONS,
+    )
 
-    Deductions are recorded as ``unknown`` unless one was captured: a late
-    scratching after a fixed-odds bet is struck reduces the payout under a
-    rule this build has never seen a payload for, and inventing the reduction
-    would corrupt the very ROI it feeds.
+
+def settle_from_placings(
+    saddlecloth: int | None,
+    placings: list[int],
+    places: int,
+    place_price: float | None,
+) -> Settlement | None:
+    """Settle from the race-level placings string — the ambiguous fallback.
+
+    The string is a list of saddlecloths in finishing order. Crucially it
+    **cannot** express a dead heat: a 3-place race whose string lists four
+    numbers is equally consistent with "two runners tied for third" and with
+    "the source simply gave us more of the finishing order than we asked
+    for". Guessing the first reading turns every beaten runner in a full
+    finishing order into a winner paid a fractional dividend, which is worse
+    than not settling at all.
+
+    So this path pays the first ``places`` entries in full and does not
+    detect dead heats. Rows settled this way are marked ``BASIS_PLACINGS``
+    and the backtester reports how many there were.
     """
     if saddlecloth is None or not placings or place_price is None:
         return None
-    if len(placings) <= places:
-        paying = placings[:places]
-        placed = saddlecloth in paying
-        return Settlement(
-            placed=placed,
-            dead_heat_divisor=1.0,
-            gross_return=place_price if placed else 0.0,
-            deduction_status="unknown",
-        )
-    outright = placings[: places - 1]
-    tied = placings[places - 1 :]
-    tied_count = float(len(tied))
-    if saddlecloth in outright:
-        return Settlement(True, 1.0, place_price, "unknown")
-    if saddlecloth in tied:
-        return Settlement(True, tied_count, place_price / tied_count, "unknown")
-    return Settlement(False, tied_count, 0.0, "unknown")
+    paying = placings[:places]
+    placed = saddlecloth in paying
+    return Settlement(
+        placed=placed,
+        dead_heat_divisor=1.0,
+        gross_return=place_price if placed else 0.0,
+        deduction_status="unknown",
+        basis=BASIS_PLACINGS,
+    )
+
+
+def settle_runner(
+    saddlecloth: int | None,
+    placings: list[int],
+    places: int,
+    place_price: float | None,
+    positions: dict[int, int] | None = None,
+) -> Settlement | None:
+    """Settle one runner, preferring per-runner positions when we have them.
+
+    Deductions are recorded as ``unknown`` either way: a late scratching
+    after a fixed-odds bet is struck reduces the payout under a rule this
+    build has never seen a payload for, and inventing the reduction would
+    corrupt the very ROI it feeds.
+    """
+    if positions:
+        settled = settle_from_positions(saddlecloth, positions, places, place_price)
+        if settled is not None:
+            return settled
+    return settle_from_placings(saddlecloth, placings, places, place_price)
 
 
 def settle_all(session) -> int:
     """Settle every unsettled valuation whose race has stored placings."""
     repo = Repository(session)
     n = 0
+    position_cache: dict[int, dict[int, int]] = {}
     for v in repo.unsettled_valuations():
         race = repo.race_by_id(v.race_id)
         runner = repo.runner_by_id(v.runner_id)
         if race is None or runner is None or not race.result_placings:
             continue
         placings = [int(x) for x in race.result_placings.split(",") if x.strip().isdigit()]
-        s = settle_runner(runner.saddlecloth, placings, v.places, v.place_price)
+        positions = position_cache.get(v.race_id)
+        if positions is None:
+            positions = repo.finish_positions(v.race_id)
+            position_cache[v.race_id] = positions
+        s = settle_runner(
+            runner.saddlecloth, placings, v.places, v.place_price, positions=positions
+        )
         if s is None:
             continue
         v.settled = True
@@ -100,23 +159,35 @@ def settle_all(session) -> int:
         v.settled_return = s.gross_return
         v.dead_heat_divisor = s.dead_heat_divisor
         v.deduction_status = s.deduction_status
+        v.settlement_basis = s.basis
         n += 1
     session.commit()
     return n
 
 
 def closing_line_value(session, valuation: m.PlaceValuation) -> float | None:
-    """Signal place price against the last place price captured before the jump."""
+    """Signal place price against the last place price captured *after* it.
+
+    The later observation must be strictly later than the valuation. Without
+    that constraint a runner captured only once is compared against the very
+    observation it was scored from, which returns exactly 0.0 — a real-looking
+    number that silently drags the reported mean toward zero and counts as
+    "did not beat the close". Such rows have no closing line, so they return
+    ``None`` and are excluded.
+    """
+    if not valuation.place_price:
+        return None
     last = session.scalar(
         select(m.RunnerPrice)
         .where(
             m.RunnerPrice.runner_id == valuation.runner_id,
             m.RunnerPrice.place_price.isnot(None),
+            m.RunnerPrice.observed_at > valuation.observed_at,
         )
         .order_by(m.RunnerPrice.observed_at.desc())
         .limit(1)
     )
-    if last is None or not last.place_price or not valuation.place_price:
+    if last is None or not last.place_price:
         return None
     return valuation.place_price / last.place_price - 1.0
 
@@ -220,12 +291,15 @@ def run_report(session, min_tier: str | None = None) -> None:
 
     clv = [(r, closing_line_value(session, r)) for r in bets]
     clv = [(r, c) for r, c in clv if c is not None]
+    no_close = len(bets) - len(clv)
     if clv:
         mean = sum(c for _, c in clv) / len(clv)
         beat = sum(1 for _, c in clv if c > 0) / len(clv)
         console.print(
             f"[bold]Closing-line value[/bold] on {len(clv)} BET signals: "
             f"mean {mean:+.2%}, beat the close {beat:.0%} of the time."
+            + (f" ({no_close} more had no later capture to compare against.)"
+               if no_close else "")
         )
     else:
         console.print("[dim]Closing-line value needs at least two captures per runner.[/dim]")
@@ -233,6 +307,13 @@ def run_report(session, min_tier: str | None = None) -> None:
     dead_heats = [r for r in rows if (r.dead_heat_divisor or 1.0) != 1.0]
     if dead_heats:
         console.print(f"[dim]{len(dead_heats)} row(s) settled through a dead heat.[/dim]")
+    by_placings = [r for r in rows if r.settlement_basis == BASIS_PLACINGS]
+    if by_placings:
+        console.print(
+            f"[dim]{len(by_placings)} row(s) settled from the placings string "
+            f"alone, which cannot express a dead heat; any dead heat in those "
+            f"races is settled as a full dividend.[/dim]"
+        )
     unknown_ded = sum(1 for r in rows if r.deduction_status == "unknown")
     if unknown_ded:
         console.print(

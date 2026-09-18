@@ -1,5 +1,5 @@
 {
- "_fixture_note": "SYNTHETIC TEST FIXTURE \u2014 invented names and prices in the LIVE-VERIFIED (2026-08-22) Sportsbet racecard shape. The `placePrice` field name inside the priceCode=L entry is NOT live-verified; see BUILD_STATUS.md. NOT real market data; never production output.",
+ "_fixture_note": "SYNTHETIC TEST FIXTURE - a RESULTED race in the live Sportsbet racecard shape. Runners 3 and 9 dead-heat for third, so both carry result '3' while the race-level result string lists four saddlecloths. Neither the per-runner positions nor the race-level string has been verified against a real resulted Sportsbet racecard; see BUILD_STATUS.md. NOT real data.",
  "id": 900104,
  "raceNumber": 7,
  "competitionId": 5701,
@@ -40,7 +40,7 @@
        "placePrice": 1.35
       }
      ],
-     "result": "-",
+     "result": "5",
      "statusCode": "A"
     },
     {
@@ -66,7 +66,7 @@
        "placePrice": 1.7
       }
      ],
-     "result": "-",
+     "result": "1",
      "statusCode": "A"
     },
     {
@@ -92,7 +92,7 @@
        "placePrice": 2.1
       }
      ],
-     "result": "-",
+     "result": "3",
      "statusCode": "A"
     },
     {
@@ -118,7 +118,7 @@
        "placePrice": 2.6
       }
      ],
-     "result": "-",
+     "result": "6",
      "statusCode": "A"
     },
     {
@@ -144,7 +144,7 @@
        "placePrice": 3.1
       }
      ],
-     "result": "-",
+     "result": "2",
      "statusCode": "A"
     },
     {
@@ -170,7 +170,7 @@
        "placePrice": 3.8
       }
      ],
-     "result": "-",
+     "result": "7",
      "statusCode": "A"
     },
     {
@@ -196,7 +196,7 @@
        "placePrice": 4.6
       }
      ],
-     "result": "-",
+     "result": "8",
      "statusCode": "A"
     },
     {
@@ -222,7 +222,7 @@
        "placePrice": 6.2
       }
      ],
-     "result": "-",
+     "result": "9",
      "statusCode": "A"
     },
     {
@@ -248,7 +248,7 @@
        "placePrice": 8.4
       }
      ],
-     "result": "-",
+     "result": "3",
      "statusCode": "A"
     },
     {

@@ -186,13 +186,20 @@ PLACE_PRICE_KEYS = (
 
 
 def _price_from_entry(entry: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    """First usable decimal price, in ``keys`` order.
+
+    Both the bare form (``"winPrice": 2.30``) and the nested form
+    (``"winPrice": {"decimal": 2.30}``) are accepted, and the check is done
+    per key rather than in two passes: a two-pass version would let the bare
+    form of a *fallback* key beat the nested form of the *preferred* one,
+    which is how you end up quietly pricing a bet off the wrong field.
+    """
     for k in keys:
+        if k not in entry:
+            continue
         v = _decimal(entry.get(k))
         if v is not None:
             return v
-    # Some shapes nest the decimal under a small object, e.g.
-    # {"winPrice": {"decimal": 2.30}}.
-    for k in keys:
         inner = entry.get(k)
         if isinstance(inner, dict):
             for ik in ("decimal", "decimalPrice", "price", "value"):
@@ -259,7 +266,20 @@ def find_win_or_place_market(payload: Any) -> dict[str, Any] | None:
     return min(candidates, key=lambda t: t[0])[1]
 
 
-_SCRATCH_WORDS = ("scratched", "latescratched", "late_scratched", "removed", "withdrawn")
+#: Substrings that mark a runner as out. Matched as substrings after
+#: stripping spaces and underscores, so "Late Scratching", "LATE_SCRATCHED"
+#: and "Scratched" all match — an exact-equality list would pass the first
+#: of those straight through as an active runner.
+_SCRATCH_WORDS = ("scratch", "withdraw", "removed", "nonrunner", "abandoned")
+
+
+def _truthy(value: Any) -> bool:
+    """True for ``True`` and for the string forms a JSON API may send."""
+    if value is True:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "y", "1")
+    return False
 
 
 def runner_status(node: dict[str, Any], live: PriceQuote | None) -> str:
@@ -272,15 +292,39 @@ def runner_status(node: dict[str, Any], live: PriceQuote | None) -> str:
     if code == "S":
         return "scratched"
     for key in ("isOut", "isScratched", "scratched"):
-        if node.get(key) is True:
+        if _truthy(node.get(key)):
             return "scratched"
     for key in ("resultStatus", "runnerStatus", "status", "selectionStatus"):
         v = node.get(key)
-        if isinstance(v, str) and v.replace(" ", "").lower() in _SCRATCH_WORDS:
-            return "scratched"
+        if isinstance(v, str):
+            flat = v.replace(" ", "").replace("_", "").replace("-", "").lower()
+            if any(w in flat for w in _SCRATCH_WORDS):
+                return "scratched"
     if live is None or live.win_price is None:
         return "scratched"
     return "active"
+
+
+def parse_finish_position(value: Any) -> int | None:
+    """A selection's finishing position from its own ``result`` field.
+
+    An open race writes ``"-"``; a resulted one writes the position. This is
+    the only unambiguous dead-heat signal available: two runners carrying
+    position 3 dead-heated for third. The comma-separated race-level
+    ``result`` string cannot express that, because a longer list is equally
+    consistent with a full finishing order.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        pos = int(value)
+        return pos if pos > 0 else None
+    if isinstance(value, str):
+        m = re.match(r"^\s*(\d+)", value.strip())
+        if m:
+            pos = int(m.group(1))
+            return pos if pos > 0 else None
+    return None
 
 
 def parse_result_placings(value: Any) -> list[int]:
@@ -484,6 +528,7 @@ def parse_racecard(
                 trainer_name=str(trainer).strip() if trainer else None,
                 barrier=int(barrier) if isinstance(barrier, (int, float)) else None,
                 status=status,
+                finish_position=parse_finish_position(sel.get("result")),
                 win_price=live.win_price if live else None,
                 place_price=live.place_price if live else None,
                 price_type="fixed",

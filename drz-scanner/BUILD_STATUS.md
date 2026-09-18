@@ -2,7 +2,7 @@
 
 Built 2026-09-18. Python 3.11.15, Linux build environment.
 
-**Test suite: 275 passed, 3 skipped** (`python -m pytest`). The three skips
+**Test suite: 290 passed, 3 skipped** (`python -m pytest`). The three skips
 are the live Sportsbet tests, which cannot run here — see below.
 
 ---
@@ -200,10 +200,27 @@ Note the first race: every Dr Z score is below 1.00 and the longshots score
 is what power de-vig buys — under proportional de-vig those tail runners
 would show large fictitious edges.
 
-**5. Results capture after a real race.** Placings parsing is tested against
-fixtures including a dead heat (`"2,5,3,9"`), and settlement divides the
-dividend among the runners sharing the tied position. No live resulted race
-has been observed by this build.
+**5. Results capture after a real race.** The whole capture-and-settle path
+is exercised against fixtures — a scan stores signals, the race resolves, a
+later scan captures the outcome, and the stored signals settle with the dead
+heat divided correctly (`tests/test_scan_results_capture.py`). What has not
+been seen is a *real* resulted Sportsbet racecard, which matters for one
+specific reason:
+
+> **The race-level `result` string cannot express a dead heat.** `"1,16,18"`
+> is a list of saddlecloths in finishing order. A 3-place race whose string
+> lists four numbers is equally consistent with "two runners dead-heated for
+> third" and with "the source gave us more of the finishing order than we
+> asked for". Guessing the first reading settles the runner that finished
+> *last* as a placed runner on a fractional dividend.
+>
+> So dead heats are resolved from **per-runner finishing positions** (each
+> selection's own `result` field), where two runners carrying position 3
+> unambiguously dead-heated for third. When those positions are unavailable
+> the settler pays the first N placings in full, marks the row
+> `settlement_basis = "placings_string"`, and the backtest report says how
+> many rows rest on that weaker evidence. The shape of a resulted racecard's
+> per-runner `result` field is **not live-verified**.
 
 **6. The `sportsbet_beta` win model — the fit itself IS verified, the
 inputs are not.** The join and the estimator were exercised against the real
@@ -235,12 +252,15 @@ without `--allow-uncalibrated`.
 * **Tier logic**: the SUSPECT cap overriding everything, the uncalibrated
   gate, the Ziemba filter, price staleness, the exactly-8 fragile flag, the
   delayed-Betfair near-jump rule, and the per-race stake cap.
-* **End to end**: value → persist → render → settle, including a dead heat,
-  on a temporary SQLite database.
+* **End to end**: value → persist → render → settle, including a dead heat
+  resolved from per-runner finishing positions, on a temporary SQLite
+  database; plus a full scan-capture-settle cycle driven through `scan_once`
+  with a fake client.
 
-## Three bugs caught during the build
+## Bugs caught during the build
 
-All three were fixed in the implementation, not worked around:
+All were fixed in the implementation, not worked around. The last six came
+out of an adversarial review pass over the finished code:
 
 1. **The per-race stake cap could be exceeded by rounding.** Three legs
    rounded to $6.67 summed to $20.01 against a $20.00 cap. Stakes are now
@@ -257,6 +277,43 @@ All three were fixed in the implementation, not worked around:
    guess. Both now use bounded optimisation. Caught by running the beta fit
    against real data for the first time; the win exponent is unchanged at
    1.0125.
+4. **Results were never captured, so nothing could ever settle.** The scan
+   selected only *open* races, and a race stops being open the moment it
+   resolves — so `Race.result_placings` was never written by any code path.
+   The backtester would have reported "no settled observations" forever and
+   the UNPROVEN banner could never have come down. A scan now runs a
+   settlement pass over races it valued earlier that have since resolved.
+   Regression test: `tests/test_scan_results_capture.py`.
+5. **A full finishing order was settled as a dead heat.** Given the string
+   `"2,5,3,9,1,7,4,8,6"` for a 3-place race, every runner from third place
+   down — including the one that finished last — settled as placed on a 1/7
+   dividend. See item 5 above for the contract that replaced it.
+6. **A beaten runner carried a dead-heat divisor**, so in any race with a
+   dead heat every loser was reported as "settled through a dead heat".
+7. **The scanner asked Sportsbet for the UTC date.** AEST is UTC+10, so for
+   the first ten or eleven hours of every Australian day it would have
+   fetched the *previous* day's schedule. At the moment this was fixed, UTC
+   read 2026-09-18 and Australia read 2026-09-19 — the bug was live.
+8. **The delayed-Betfair no-BET window was dead code.** Its condition was
+   `len(models) == 1`, which can never hold because the Sportsbet model is
+   always present. It now fires when Betfair is delayed and nothing else
+   clears the BET threshold — i.e. exactly when a delayed price alone would
+   have carried the row.
+9. **The promised name check in the beta fit never ran**; `n_name_mismatches`
+   was hard-wired to 0 while the docstring claimed names were compared. It
+   now genuinely compares them — and immediately caught a mis-pairing in the
+   test that built it, because real TAB numbers are not contiguous 1..n
+   (scratchings leave gaps).
+10. **Closing-line value compared a signal against itself.** The query had no
+   "strictly later" constraint, so any runner captured once returned exactly
+   0.00% CLV, silently dragging the reported mean toward zero.
+11. **A fallback price field could beat the preferred one.** `_price_from_entry`
+   scanned all keys for a bare number before trying the nested
+   `{"decimal": ...}` form, so `{"winPrice": {"decimal": 2.30}, "win": 9.99}`
+   returned 9.99.
+12. **Scratch wording was matched by exact equality**, so `"Late Scratching"`
+   passed through as an active runner while `"Scratched"` did not. Matching
+   is now by substring, and string booleans (`"isOut": "true"`) count.
 
 ## To finish verification
 

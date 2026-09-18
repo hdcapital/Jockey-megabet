@@ -170,11 +170,6 @@ def value_race(
         p_place_by_model[name] = corrected
 
     chosen = best_model(models) or sb.win_model
-    delayed_only = (
-        chosen == WIN_MODEL_BETFAIR
-        and models[WIN_MODEL_BETFAIR].betfair_delayed
-        and len(models) == 1
-    )
 
     out: list[PlaceValuation] = []
     for i, runner in enumerate(active):
@@ -185,6 +180,7 @@ def value_race(
             else None
         )
         drz_by_model: dict[str, float] = {}
+        drz_without_betfair: dict[str, float] = {}
         pp_by_model: dict[str, float] = {}
         wp_by_model: dict[str, float] = {}
         for name in models:
@@ -193,9 +189,22 @@ def value_race(
             pp_by_model[name] = p
             if place_price:
                 drz_by_model[name] = drz_score(p, place_price)
+                if name != WIN_MODEL_BETFAIR:
+                    drz_without_betfair[name] = drz_by_model[name]
 
         p_place = pp_by_model.get(chosen)
         drz = drz_by_model.get(chosen)
+        # "A delayed Betfair price ALONE upgrading this row" means: Betfair
+        # is delayed, and without it nothing else here clears the BET bar.
+        # Testing the number of models instead would never fire, because the
+        # Sportsbet model is always present.
+        delayed_only = (
+            WIN_MODEL_BETFAIR in models
+            and models[WIN_MODEL_BETFAIR].betfair_delayed
+            and bool(drz_by_model)
+            and max(drz_by_model.values()) >= settings.drz_min
+            and not any(d >= settings.drz_min for d in drz_without_betfair.values())
+        )
         quality, notes = quality_for(
             age,
             settings.max_price_age_seconds,

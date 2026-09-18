@@ -67,7 +67,8 @@ def time_split(arrays: RaceArrays, holdout_days: int = 365) -> Split:
 def _subset(a: RaceArrays, sel: np.ndarray) -> RaceArrays:
     return RaceArrays(
         q=a.q[sel], mask=a.mask[sel], won=a.won[sel], placed=a.placed[sel],
-        place_bsp=a.place_bsp[sel], n_runners=a.n_runners[sel],
+        place_bsp=a.place_bsp[sel], names=a.names[sel],
+        tab_numbers=a.tab_numbers[sel], n_runners=a.n_runners[sel],
         places=a.places[sel], dates=a.dates[sel],
         keys=a.keys[sel].reset_index(drop=True),
     )
@@ -152,9 +153,21 @@ def binary_log_loss(p: np.ndarray, y: np.ndarray, mask: np.ndarray) -> float:
     return float(-(yy * np.log(p) + (1 - yy) * np.log(1 - p)).mean())
 
 
+#: Races per chunk in :func:`evaluate`. The batch engine builds three
+#: (chunk, N, N) float64 tensors, so a full 45,000-race pass at N=24 would
+#: peak near a gigabyte — fine on a workstation, not fine on the laptop this
+#: is meant to run on. Chunking costs nothing measurable and bounds it.
+EVAL_CHUNK = 4000
+
+
 def evaluate(a: RaceArrays, lam: float, tau: float,
              correction: list[dict[str, float]] | None = None) -> np.ndarray:
-    p = place_probabilities_batch(a.q, a.mask, a.places, lam, tau)
+    p = np.empty_like(a.q)
+    for lo in range(0, a.n_races, EVAL_CHUNK):
+        hi = min(lo + EVAL_CHUNK, a.n_races)
+        p[lo:hi] = place_probabilities_batch(
+            a.q[lo:hi], a.mask[lo:hi], a.places[lo:hi], lam, tau
+        )
     if correction:
         for bucket in correction:
             sel = (a.q >= bucket["lo"]) & (a.q < bucket["hi"]) & a.mask
@@ -285,11 +298,28 @@ def fit_beta_from_stored_prices(a: RaceArrays, db_url: str | None = None) -> Bet
         return BetaFit(None, 0, unmatched, 0,
                        "no stored race matched a history race on date+track+race number")
 
+    # Join by TAB number, and CHECK the runner name. The key (date + track +
+    # race number + TAB) is strong but not unique-by-construction: two venues
+    # can normalise to the same track key and a meeting can be renumbered. A
+    # name that does not match means the pairing is wrong, so the runner is
+    # dropped and counted — never quietly accepted.
     name_mismatch = 0
     per_race: dict[int, list[tuple[int, float]]] = {}
     for _, r in merged.iterrows():
         ri = int(r["race_index"])
         tab = int(r["saddlecloth"])
+        hist_names = {
+            int(t): _norm_name(n)
+            for t, n in zip(a.tab_numbers[ri], a.names[ri])
+            if int(t) > 0
+        }
+        expected = hist_names.get(tab)
+        if expected is None:
+            name_mismatch += 1
+            continue
+        if _norm_name(r["horse_name"]) != expected:
+            name_mismatch += 1
+            continue
         per_race.setdefault(ri, []).append((tab, float(r["win_price"])))
 
     # Assemble padded arrays of (stored price, did-win) using TAB order, which
@@ -328,7 +358,11 @@ def fit_beta_from_stored_prices(a: RaceArrays, db_url: str | None = None) -> Bet
         n_races=len(races),
         n_unmatched_races=unmatched,
         n_name_mismatches=name_mismatch,
-        detail=f"conditional-logit fit on {len(races)} joined races",
+        detail=(
+            f"conditional-logit fit on {len(races)} joined races"
+            + (f"; {name_mismatch} runner(s) dropped on a name mismatch"
+               if name_mismatch else "; every joined runner's name matched")
+        ),
     )
 
 
@@ -480,6 +514,8 @@ def main(argv: list[str] | None = None) -> int:
                       f"({'in use' if usable else f'need {settings.beta_min_races}'})")
                 if bf.n_unmatched_races:
                     print(f"    unmatched races     {bf.n_unmatched_races} (recorded, never guessed)")
+                if bf.n_name_mismatches:
+                    print(f"    name mismatches     {bf.n_name_mismatches} runner(s) dropped")
             else:
                 print(f"  sportsbet beta        not fitted — {bf.detail}")
         except Exception as exc:  # a beta failure must not lose the lam/tau fit

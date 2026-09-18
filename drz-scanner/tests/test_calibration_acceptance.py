@@ -237,9 +237,14 @@ def test_beta_fit_joins_real_races_and_recovers_a_known_exponent(tmp_path):
                 status="open", fetched_at=start,
             ))
             for i in range(n):
+                # Real TAB numbers are NOT 1..n — scratchings leave gaps — so
+                # the saddlecloth has to come from the data, not from the
+                # loop index. (Assuming otherwise is exactly the mis-pairing
+                # the name check exists to catch, and it does catch it.)
                 info = RunnerInfo(
                     source="sportsbet", source_id=f"race-{ri}-{i}",
-                    horse_name=f"Runner {ri}-{i}", saddlecloth=i + 1,
+                    horse_name=str(month.names[ri][i]),
+                    saddlecloth=int(month.tab_numbers[ri][i]),
                     win_price=float(prices[i]), place_price=2.0,
                 )
                 repo.record_price(
@@ -252,9 +257,67 @@ def test_beta_fit_joins_real_races_and_recovers_a_known_exponent(tmp_path):
     assert fit.beta is not None, fit.detail
     assert fit.n_races == month.n_races, "every stored race should have joined"
     assert fit.n_unmatched_races == 0
+    assert fit.n_name_mismatches == 0, "every runner's name should have matched"
     assert fit.beta == pytest.approx(true_beta, abs=0.02), (
         f"recovered {fit.beta}, planted {true_beta}"
     )
+
+
+def test_beta_fit_drops_runners_whose_name_does_not_match(tmp_path):
+    """The name check is a real check, not a field that is always zero."""
+    from datetime import datetime, timezone
+
+    import pandas as pd
+
+    from app.calibrate import fit_beta_from_stored_prices
+    from app.database.repository import Repository, session_factory
+    from app.sources.base import MeetingInfo, RaceInfo, RunnerInfo
+
+    try:
+        month = load_history(date(2026, 8, 1), date(2026, 8, 31),
+                             download_missing=False)
+    except HistoryUnavailableError as exc:
+        pytest.skip(f"history unavailable: {exc}")
+
+    db_url = f"sqlite:///{tmp_path / 'mismatch.db'}"
+    Session = session_factory(db_url)
+    n_races = 40
+    with Session() as session:
+        repo = Repository(session)
+        for ri in range(n_races):
+            key = month.keys.iloc[ri]
+            n = int(month.n_runners[ri])
+            meeting_date = pd.to_datetime(key["meeting_date"]).date()
+            start = datetime.combine(
+                meeting_date, datetime.min.time(), tzinfo=timezone.utc
+            )
+            meeting = repo.upsert_meeting(MeetingInfo(
+                source="sportsbet",
+                source_id=f"mt-{key['TRACK']}-{meeting_date}",
+                venue=str(key["TRACK"]), meeting_date=meeting_date,
+            ))
+            race_row = repo.upsert_race(meeting, RaceInfo(
+                source="sportsbet", source_id=f"race-{ri}",
+                race_number=int(key["RACE_NO"]), start_time=start,
+                status="open", fetched_at=start,
+            ))
+            for i in range(n):
+                # Deliberately wrong names: the join key still matches, so
+                # only the name check can catch this.
+                info = RunnerInfo(
+                    source="sportsbet", source_id=f"race-{ri}-{i}",
+                    horse_name=f"Not The Right Horse {i}", saddlecloth=i + 1,
+                    win_price=4.0, place_price=2.0,
+                )
+                repo.record_price(
+                    race_row, repo.upsert_runner(race_row, info), info,
+                    observed_at=start, seconds_to_jump=60.0, raw_sha256=None,
+                )
+        session.commit()
+
+    fit = fit_beta_from_stored_prices(month, db_url=db_url)
+    assert fit.n_name_mismatches > 0, "mismatched names must be counted"
+    assert fit.beta is None, "a fit must not be produced from mis-paired runners"
 
 
 def test_optimisers_do_not_depend_on_a_lucky_bracket(arrays):
@@ -274,6 +337,8 @@ def test_optimisers_do_not_depend_on_a_lucky_bracket(arrays):
         won=np.tile([True] + [False] * 4, (10, 1)),
         placed=np.tile([True, True, False, False, False], (10, 1)),
         place_bsp=np.full((10, 5), np.nan),
+        names=np.full((10, 5), "", dtype=object),
+        tab_numbers=np.tile([1, 2, 3, 4, -1], (10, 1)),
         n_runners=np.full(10, 4),
         places=np.full(10, 2),
         dates=arrays.dates[:10],

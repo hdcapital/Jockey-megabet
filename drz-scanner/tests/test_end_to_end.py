@@ -10,7 +10,13 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.backtest import run_report, settle_all, settle_runner
+from app.backtest import (
+    BASIS_PLACINGS,
+    BASIS_POSITIONS,
+    run_report,
+    settle_all,
+    settle_runner,
+)
 from app.calibration import Calibration
 from app.database import models as m
 from app.database.repository import Repository, session_factory
@@ -155,6 +161,12 @@ def test_partial_betfair_book_is_refused(fixture, settings, calibration):
 def test_persist_render_and_settle_with_a_dead_heat(
     fixture, settings, calibration, tmp_path, capsys, monkeypatch
 ):
+    """The realistic flow: value an open race, then settle it once it resolves.
+
+    The result arrives the way the scanner actually gets it — by re-reading
+    the racecard after the race has run, which carries each runner's
+    finishing position. Two of them share third.
+    """
     monkeypatch.setattr("app.config.get_settings", lambda: settings)
     race = _race(fixture, "racecard_open_9_runners.json")
     vals = value_race(race, calibration, settings, now=NOW, allow_uncalibrated=True)
@@ -185,32 +197,41 @@ def test_persist_render_and_settle_with_a_dead_heat(
         assert json.loads(one.drz_json)
         assert one.calibration_version == calibration.version
         assert session.query(m.RunnerPrice).count() == 10  # scratching included
+        assert settle_all(session) == 0, "nothing to settle before the race runs"
 
-        # The race resolves with a dead heat for third: 2, 5, then 3 and 9.
-        race_row.result_placings = "2,5,3,9"
+        # --- the race resolves -------------------------------------------
+        resulted = parse_racecard(
+            fixture("racecard_resulted_dead_heat.json"),
+            event_id="900101", fetched_at=NOW,
+        )
+        assert resulted.status == "resulted"
+        repo.upsert_race(meeting, resulted)
+        for runner in resulted.runners:
+            repo.upsert_runner(race_row, runner)
         session.commit()
-        n = settle_all(session)
-        assert n == 9
 
-        settled = {r.runner_id: r for r in session.query(m.PlaceValuation).all()}
-        by_name = {rows[k].runner_id: k for k in rows}
-        for v in settled.values():
+        positions = repo.finish_positions(race_row.race_id)
+        assert positions[3] == 3 and positions[9] == 3, "the dead heat is recorded"
+        assert session.get(m.Race, race_row.race_id).result_placings == "2,5,3,9"
+
+        assert settle_all(session) == 9
+
+        for v in session.query(m.PlaceValuation).all():
             runner = session.get(m.Runner, v.runner_id)
             assert v.settled
-            assert v.placed == (runner.saddlecloth in (2, 5, 3, 9))
+            assert v.settlement_basis == BASIS_POSITIONS
             assert v.deduction_status == "unknown"
-            expected_div = 2.0 if runner.saddlecloth not in (2, 5) else 1.0
+            assert v.placed == (runner.saddlecloth in (2, 5, 3, 9))
+            expected_div = 2.0 if runner.saddlecloth in (3, 9) else 1.0
             assert v.dead_heat_divisor == pytest.approx(expected_div)
 
-        winner = next(v for v in settled.values()
-                      if session.get(m.Runner, v.runner_id).saddlecloth == 2)
-        assert winner.settled_return == pytest.approx(winner.place_price)
-        dead_heater = next(v for v in settled.values()
-                           if session.get(m.Runner, v.runner_id).saddlecloth == 3)
-        assert dead_heater.settled_return == pytest.approx(dead_heater.place_price / 2)
-        loser = next(v for v in settled.values()
-                     if session.get(m.Runner, v.runner_id).saddlecloth == 1)
-        assert loser.settled_return == 0.0
+        def row(saddle):
+            return next(v for v in session.query(m.PlaceValuation).all()
+                        if session.get(m.Runner, v.runner_id).saddlecloth == saddle)
+
+        assert row(2).settled_return == pytest.approx(row(2).place_price)
+        assert row(3).settled_return == pytest.approx(row(3).place_price / 2)
+        assert row(1).settled_return == 0.0
 
         run_report(session)
 
@@ -231,32 +252,94 @@ def test_persist_render_and_settle_with_a_dead_heat(
     assert "9 runners, 3 places" in out
 
 
-@pytest.mark.parametrize("placings,places,saddle,expect_placed,expect_div", [
-    ([1, 2, 3], 3, 3, True, 1.0),
-    ([1, 2, 3], 3, 4, False, 1.0),
-    ([1, 2], 2, 2, True, 1.0),
-    ([1, 2], 2, 3, False, 1.0),
-    # Dead heat for third: four numbers for three dividends. Only the two
-    # runners sharing third carry a divisor; first and second are paid in full.
-    ([2, 5, 3, 9], 3, 2, True, 1.0),
-    ([2, 5, 3, 9], 3, 5, True, 1.0),
-    ([2, 5, 3, 9], 3, 3, True, 2.0),
-    ([2, 5, 3, 9], 3, 9, True, 2.0),
-    ([2, 5, 3, 9], 3, 1, False, 2.0),
-    # Three numbers for two dividends: a dead heat for second.
-    ([1, 4, 7], 2, 1, True, 1.0),
-    ([1, 4, 7], 2, 4, True, 2.0),
-    ([1, 4, 7], 2, 7, True, 2.0),
+# Per-runner finishing positions: the unambiguous path. Two runners sharing
+# a position dead-heated for it, and only they carry a divisor.
+DEAD_HEAT_THIRD = {2: 1, 5: 2, 3: 3, 9: 3, 1: 5, 6: 7}
+DEAD_HEAT_SECOND = {1: 1, 4: 2, 7: 2, 2: 4}
+CLEAN_FINISH = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5}
+
+
+@pytest.mark.parametrize("positions,places,saddle,expect_placed,expect_div", [
+    (CLEAN_FINISH, 3, 3, True, 1.0),
+    (CLEAN_FINISH, 3, 4, False, 1.0),
+    (CLEAN_FINISH, 2, 2, True, 1.0),
+    (CLEAN_FINISH, 2, 3, False, 1.0),
+    # Dead heat for third over three dividends: 2 and 5 paid in full, 3 and 9
+    # share the third dividend, everyone else gets nothing and no divisor.
+    (DEAD_HEAT_THIRD, 3, 2, True, 1.0),
+    (DEAD_HEAT_THIRD, 3, 5, True, 1.0),
+    (DEAD_HEAT_THIRD, 3, 3, True, 2.0),
+    (DEAD_HEAT_THIRD, 3, 9, True, 2.0),
+    (DEAD_HEAT_THIRD, 3, 1, False, 1.0),
+    (DEAD_HEAT_THIRD, 3, 6, False, 1.0),
+    # Dead heat for second over two dividends.
+    (DEAD_HEAT_SECOND, 2, 1, True, 1.0),
+    (DEAD_HEAT_SECOND, 2, 4, True, 2.0),
+    (DEAD_HEAT_SECOND, 2, 7, True, 2.0),
+    (DEAD_HEAT_SECOND, 2, 2, False, 1.0),
 ])
-def test_settle_runner_handles_dead_heats(placings, places, saddle,
-                                          expect_placed, expect_div):
-    s = settle_runner(saddle, placings, places, place_price=3.0)
+def test_settle_from_finish_positions(positions, places, saddle,
+                                      expect_placed, expect_div):
+    s = settle_runner(saddle, [], places, place_price=3.0, positions=positions)
+    assert s.basis == BASIS_POSITIONS
     assert s.placed is expect_placed
     assert s.dead_heat_divisor == pytest.approx(expect_div)
-    assert s.gross_return == pytest.approx(3.0 / expect_div if expect_placed else 0.0)
+    assert s.gross_return == pytest.approx(
+        3.0 / expect_div if expect_placed else 0.0
+    )
+
+
+def test_a_beaten_runner_never_carries_a_dead_heat_divisor():
+    """Otherwise every loser in the race is reported as a dead-heat settlement."""
+    beaten = settle_runner(6, [], 3, 3.0, positions=DEAD_HEAT_THIRD)
+    assert not beaten.placed
+    assert beaten.dead_heat_divisor == 1.0
+
+
+@pytest.mark.parametrize("placings,places,saddle,expect_placed", [
+    ([1, 2, 3], 3, 3, True),
+    ([1, 2, 3], 3, 4, False),
+    ([1, 2], 2, 2, True),
+    ([1, 2], 2, 3, False),
+])
+def test_settle_from_placings_when_positions_are_absent(placings, places,
+                                                        saddle, expect_placed):
+    s = settle_runner(saddle, placings, places, place_price=3.0)
+    assert s.basis == BASIS_PLACINGS
+    assert s.placed is expect_placed
+    assert s.dead_heat_divisor == 1.0
+
+
+def test_a_full_finishing_order_is_never_mistaken_for_a_dead_heat():
+    """The bug this contract exists to prevent.
+
+    The placings string is a finishing order, so a 3-place race can arrive
+    with every runner listed. Reading the surplus as a dead heat would settle
+    the runner that finished LAST as a placed runner paid a fractional
+    dividend. Only the first three may be paid, and no dead heat may be
+    inferred from length alone.
+    """
+    full_order = [2, 5, 3, 9, 1, 7, 4, 8, 6]
+    paid = [s for s in full_order
+            if settle_runner(s, full_order, 3, 3.40).placed]
+    assert paid == [2, 5, 3]
+    last = settle_runner(6, full_order, 3, 3.40)
+    assert not last.placed and last.gross_return == 0.0
+    for saddle in (2, 5, 3):
+        assert settle_runner(saddle, full_order, 3, 3.40).gross_return == 3.40
+
+
+def test_positions_take_precedence_over_the_placings_string():
+    s = settle_runner(9, [2, 5, 3], 3, 3.0, positions=DEAD_HEAT_THIRD)
+    assert s.basis == BASIS_POSITIONS
+    assert s.placed and s.dead_heat_divisor == 2.0
 
 
 def test_settle_runner_refuses_without_evidence():
     assert settle_runner(None, [1, 2, 3], 3, 2.0) is None
     assert settle_runner(1, [], 3, 2.0) is None
     assert settle_runner(1, [1, 2, 3], 3, None) is None
+    # A runner absent from the position map falls back to the placings string.
+    assert settle_runner(99, [1, 2, 3], 3, 2.0, positions={1: 1}).basis == BASIS_PLACINGS
+    # ...and with neither source, nothing is settled.
+    assert settle_runner(99, [], 3, 2.0, positions={1: 1}) is None

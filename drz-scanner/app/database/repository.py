@@ -120,12 +120,15 @@ class Repository:
                 jockey_name=info.jockey_name,
                 trainer_name=info.trainer_name,
                 barrier=info.barrier,
+                finish_position=info.finish_position,
             )
             self.s.add(row)
             self.s.flush()
         else:
             row.jockey_name = info.jockey_name or row.jockey_name
             row.trainer_name = info.trainer_name or row.trainer_name
+        if info.finish_position is not None:
+            row.finish_position = info.finish_position
         return row
 
     # -- observations ----------------------------------------------------
@@ -212,6 +215,22 @@ class Repository:
             self.s.scalars(
                 select(m.PlaceValuation).where(m.PlaceValuation.settled.is_(False))
             )
+        )
+
+    def finish_positions(self, race_id: int) -> dict[int, int]:
+        """Saddlecloth -> finishing position for one race, where recorded."""
+        rows = self.s.scalars(
+            select(m.Runner).where(m.Runner.race_id == race_id)
+        )
+        return {
+            r.saddlecloth: r.finish_position
+            for r in rows
+            if r.saddlecloth is not None and r.finish_position is not None
+        }
+
+    def race_by_source_id(self, source: str, source_id: str) -> m.Race | None:
+        return self.s.scalar(
+            select(m.Race).where(m.Race.source == source, m.Race.source_id == source_id)
         )
 
     def race_by_id(self, race_id: int) -> m.Race | None:
