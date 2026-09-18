@@ -135,5 +135,92 @@
       "delta": -0.027001
     }
   ],
-  "provenance": "Fitted by maximum likelihood on Betfair Australia historical BSP (betfair-datascientists ANZ_Thoroughbreds), thoroughbreds only, New Zealand excluded, every runner priced, exactly one winner, 2 or 3 placed runners including the winner, 5+ runners. Trained on meetings before the final 365 days, tested on the final window. Reproduce with `python -m app.calibrate`. Shipped lam/tau are pinned to 0.71/0.7; the unconstrained fit on this data gave 0.7032/0.7076. The likelihood surface is flat between them, so the rounder numbers are shipped for legibility."
+  "provenance": "Fitted by maximum likelihood on Betfair Australia historical BSP (betfair-datascientists ANZ_Thoroughbreds), thoroughbreds only, New Zealand excluded, every runner priced, exactly one winner, 2 or 3 placed runners including the winner, 5+ runners. Trained on meetings before the final 365 days, tested on the final window. Reproduce with `python -m app.calibrate`. Shipped lam/tau are pinned to 0.71/0.7; the unconstrained fit on this data gave 0.7032/0.7076. The likelihood surface is flat between them, so the rounder numbers are shipped for legibility.",
+  "band_ratio": {
+    "betfair": [
+      {
+        "lo": 1.0,
+        "hi": 2.0,
+        "n": 3668,
+        "actual": 0.865,
+        "modelled": 0.8905,
+        "ratio": 0.9714
+      },
+      {
+        "lo": 2.0,
+        "hi": 3.0,
+        "n": 10418,
+        "actual": 0.7429,
+        "modelled": 0.757,
+        "ratio": 0.9815
+      },
+      {
+        "lo": 3.0,
+        "hi": 5.0,
+        "n": 29018,
+        "actual": 0.598,
+        "modelled": 0.6014,
+        "ratio": 0.9944
+      },
+      {
+        "lo": 5.0,
+        "hi": 9.0,
+        "n": 46161,
+        "actual": 0.4409,
+        "modelled": 0.4398,
+        "ratio": 1.0025
+      },
+      {
+        "lo": 9.0,
+        "hi": 15.0,
+        "n": 44858,
+        "actual": 0.3234,
+        "modelled": 0.3125,
+        "ratio": 1.0349
+      },
+      {
+        "lo": 15.0,
+        "hi": 21.0,
+        "n": 28029,
+        "actual": 0.2411,
+        "modelled": 0.236,
+        "ratio": 1.0216
+      },
+      {
+        "lo": 21.0,
+        "hi": 31.0,
+        "n": 25841,
+        "actual": 0.1845,
+        "modelled": 0.1854,
+        "ratio": 0.995
+      },
+      {
+        "lo": 31.0,
+        "hi": 51.0,
+        "n": 27554,
+        "actual": 0.136,
+        "modelled": 0.1376,
+        "ratio": 0.9886
+      },
+      {
+        "lo": 51.0,
+        "hi": 101.0,
+        "n": 25340,
+        "actual": 0.0922,
+        "modelled": 0.0931,
+        "ratio": 0.9903
+      },
+      {
+        "lo": 101.0,
+        "hi": 1000000000.0,
+        "n": 34397,
+        "actual": 0.0346,
+        "modelled": 0.0421,
+        "ratio": 0.8231
+      }
+    ]
+  },
+  "recommended_max_win_price": {
+    "betfair": 51.0
+  }
 }

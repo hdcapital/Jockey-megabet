@@ -67,7 +67,8 @@ def time_split(arrays: RaceArrays, holdout_days: int = 365) -> Split:
 def _subset(a: RaceArrays, sel: np.ndarray) -> RaceArrays:
     return RaceArrays(
         q=a.q[sel], mask=a.mask[sel], won=a.won[sel], placed=a.placed[sel],
-        place_bsp=a.place_bsp[sel], names=a.names[sel],
+        place_bsp=a.place_bsp[sel], win_bsp=a.win_bsp[sel],
+        best_back=a.best_back[sel], best_lay=a.best_lay[sel], names=a.names[sel],
         tab_numbers=a.tab_numbers[sel], n_runners=a.n_runners[sel],
         places=a.places[sel], dates=a.dates[sel],
         keys=a.keys[sel].reset_index(drop=True),
@@ -214,6 +215,132 @@ def place_bsp_log_loss(a: RaceArrays, p: np.ndarray) -> float | None:
     total = implied.sum(axis=1)
     scale = np.divide(a.places, total, out=np.zeros_like(total, dtype=float), where=total > 0)
     return binary_log_loss(np.clip(implied * scale[:, None], 1e-12, 1 - 1e-12), a.placed, valid)
+
+
+# ---------------------------------------------------------------------------
+# Win-price band calibration
+# ---------------------------------------------------------------------------
+
+#: Win-price bands, as (exclusive low, inclusive high) decimal odds.
+WIN_PRICE_BANDS = (
+    (1.0, 2.0), (2.0, 3.0), (3.0, 5.0), (5.0, 9.0), (9.0, 15.0),
+    (15.0, 21.0), (21.0, 31.0), (31.0, 51.0), (51.0, 101.0), (101.0, 1e9),
+)
+
+#: A band needs this many runners before its ratio is trusted at all.
+MIN_BAND_RUNNERS = 300
+
+#: The cap is drawn where the bands stop holding. A band "holds" at 0.97 or
+#: better: the model may be a little cold there, but it is not selling
+#: probability it does not have.
+BAND_HOLDS_AT = 0.97
+
+#: The cap search starts here — below it the model is knowingly 2-3% hot, and
+#: that is a shrink the band correction handles rather than a reason to cap.
+CAP_SEARCH_FROM = 3.0
+
+#: Runner-level relative spread allowed in the live-style table.
+LIVE_MAX_RELATIVE_SPREAD = 0.10
+
+
+def band_table(
+    a: RaceArrays,
+    lam: float,
+    tau: float,
+    q: np.ndarray,
+    price: np.ndarray,
+    evaluate_mask: np.ndarray,
+) -> list[dict[str, float]]:
+    """Actual place rate divided by modelled place probability, per band.
+
+    ``q`` are the normalised win probabilities to model from, ``price`` the
+    decimal win price each runner is banded by, and ``evaluate_mask`` picks
+    which runners count towards the ratio (the whole book is always used to
+    normalise, because a partial book cannot be normalised at all).
+    """
+    p = np.empty_like(q)
+    for lo in range(0, a.n_races, EVAL_CHUNK):
+        hi = min(lo + EVAL_CHUNK, a.n_races)
+        p[lo:hi] = place_probabilities_batch(
+            q[lo:hi], a.mask[lo:hi], a.places[lo:hi], lam, tau
+        )
+    rows: list[dict[str, float]] = []
+    for lo, hi in WIN_PRICE_BANDS:
+        sel = evaluate_mask & (price > lo) & (price <= hi)
+        n = int(sel.sum())
+        if n < MIN_BAND_RUNNERS:
+            continue
+        modelled = float(p[sel].mean())
+        actual = float(a.placed[sel].mean())
+        rows.append({
+            "lo": lo,
+            "hi": hi,
+            "n": n,
+            "actual": round(actual, 4),
+            "modelled": round(modelled, 4),
+            "ratio": round(actual / modelled, 4) if modelled > 0 else 0.0,
+        })
+    return rows
+
+
+def bsp_bands(a: RaceArrays, lam: float, tau: float) -> list[dict[str, float]]:
+    """Band table from Betfair starting prices — the full sample."""
+    raw = np.where(a.mask & np.isfinite(a.win_bsp) & (a.win_bsp > 1), 1.0 / a.win_bsp, 0.0)
+    total = raw.sum(axis=1, keepdims=True)
+    q = np.divide(raw, total, out=np.zeros_like(raw), where=total > 0)
+    price = np.where(a.mask, np.nan_to_num(a.win_bsp), 0.0)
+    return band_table(a, lam, tau, q, price, a.mask)
+
+
+def live_style_bands(a: RaceArrays, lam: float, tau: float) -> list[dict[str, float]]:
+    """Band table from the prices actually showing at the scheduled off.
+
+    The probability used is the midpoint *in probability space* of best back
+    and best lay — the same quantity the scanner derives live. Normalisation
+    uses every runner that has both sides, because a book missing a runner
+    cannot be normalised; the ratio is then measured only over runners whose
+    own relative spread is within ``LIVE_MAX_RELATIVE_SPREAD``, which is the
+    reliability gate the scanner itself applies per runner.
+    """
+    have = (
+        a.mask
+        & np.isfinite(a.best_back) & np.isfinite(a.best_lay)
+        & (a.best_back > 1) & (a.best_lay > 1)
+    )
+    complete = (have | ~a.mask).all(axis=1)
+    if complete.sum() < 1000:
+        log.warning("live-style band table: only %d complete books", complete.sum())
+        return []
+    sub = _subset(a, complete)
+    have = have[complete]
+    mid = np.where(have, 0.5 * (1.0 / a.best_back[complete] + 1.0 / a.best_lay[complete]), 0.0)
+    total = mid.sum(axis=1, keepdims=True)
+    q = np.divide(mid, total, out=np.zeros_like(mid), where=total > 0)
+    price = np.divide(1.0, mid, out=np.zeros_like(mid), where=mid > 0)
+    spread = np.divide(
+        a.best_lay[complete] - a.best_back[complete],
+        a.best_back[complete],
+        out=np.full_like(mid, np.inf),
+        where=have,
+    )
+    return band_table(sub, lam, tau, q, price, have & (spread <= LIVE_MAX_RELATIVE_SPREAD))
+
+
+def recommended_cap(bands: list[dict[str, float]]) -> float | None:
+    """Top edge of the highest band that holds, with every band below it.
+
+    Starting at ``CAP_SEARCH_FROM``, walk up while each band's ratio is at
+    least ``BAND_HOLDS_AT``; the answer is the top edge of the last one that
+    did. ``None`` when even the first band fails.
+    """
+    cap: float | None = None
+    for band in bands:
+        if band["lo"] < CAP_SEARCH_FROM:
+            continue
+        if band["ratio"] < BAND_HOLDS_AT:
+            break
+        cap = band["hi"]
+    return cap
 
 
 # ---------------------------------------------------------------------------
@@ -444,6 +571,11 @@ def main(argv: list[str] | None = None) -> int:
     ll_place_bsp = place_bsp_log_loss(test, p_model)
     table = calibration_table(test, p_corrected if adopt else p_model)
 
+    # --- win-price band calibration (training window only) ----------------
+    bsp_band_rows = bsp_bands(train, lam, tau)
+    live_band_rows = live_style_bands(train, lam, tau)
+    cap = recommended_cap(live_band_rows) if live_band_rows else None
+
     cal = Calibration(
         lam=round(lam, 4),
         tau=round(tau, 4),
@@ -466,6 +598,10 @@ def main(argv: list[str] | None = None) -> int:
         },
         calibration_table=table,
         win_prob_bucket_correction=correction,
+        band_ratio={"betfair": bsp_band_rows} if bsp_band_rows else {},
+        recommended_max_win_price=(
+            {"betfair": cap} if cap is not None else {}
+        ),
         provenance=(
             "Fitted by maximum likelihood on Betfair Australia historical BSP "
             "(betfair-datascientists ANZ_Thoroughbreds), thoroughbreds only, "
@@ -501,6 +637,33 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  log-loss  place BSP   {ll_place_bsp:.4f}   (the exchange's own opinion)")
     print(f"  current file          lam {existing.lam:.4f} tau {existing.tau:.4f} "
           f"({existing.version})")
+
+    if bsp_band_rows:
+        print()
+        print("  win-price bands (training window; actual place rate / model)")
+        print(f"    {'band':>11} {'n':>7} {'BSP':>6} {'live':>6}")
+        live_by_band = {(b["lo"], b["hi"]): b for b in live_band_rows}
+        for b in bsp_band_rows:
+            name = (f"({b['lo']:g},{b['hi']:g}]" if b["hi"] < 1e9
+                    else f"({b['lo']:g}+]")
+            live = live_by_band.get((b["lo"], b["hi"]))
+            live_cell = f"{live['ratio']:.2f}" if live else "-"
+            print(f"    {name:>11} {b['n']:7,} {b['ratio']:6.2f} {live_cell:>6}")
+        shrinking = [b for b in bsp_band_rows if b["ratio"] < 1.0]
+        print(f"    {len(shrinking)} band(s) shrink p_place; bands above 1.0 are "
+              f"applied as a no-op (never scaled up)")
+    if cap is not None:
+        configured = settings.max_win_price_betfair
+        print()
+        print(f"  recommended max win price (betfair)  {cap:.0f}"
+              f"   configured {configured:.0f}")
+        if cap < configured:
+            print(f"  WARNING: the bands stop holding at {cap:.0f}, below the "
+                  f"configured {configured:.0f}. Lower MAX_WIN_PRICE_BETFAIR, or "
+                  f"accept that rows between {cap:.0f} and {configured:.0f} rest "
+                  f"on probabilities this data does not validate.")
+            log.warning("recommended cap %.0f is below configured %.0f", cap, configured)
+        print("  (advisory only — the configured value is never changed for you)")
 
     if not args.skip_beta:
         try:

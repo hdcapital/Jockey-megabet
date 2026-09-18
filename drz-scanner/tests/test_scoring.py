@@ -5,6 +5,13 @@ from __future__ import annotations
 import pytest
 
 from app.scoring import (
+    REASON_BEYOND_CAP,
+    REASON_DELAYED,
+    REASON_INDICATIVE,
+    REASON_MODELS_SHORT,
+    REASON_NO_EXCHANGE,
+    REASON_STALE,
+    REASON_UNCALIBRATED,
     QUALITY_HIGH,
     QUALITY_LOW,
     QUALITY_MEDIUM,
@@ -24,6 +31,7 @@ from app.scoring import (
 
 
 def base(**kw) -> TierInputs:
+    """A row that satisfies every BET criterion, so each test can break one."""
     args = dict(
         drz_by_model={"betfair": 1.15, "sportsbet_beta": 1.12},
         win_price=4.0,
@@ -31,9 +39,17 @@ def base(**kw) -> TierInputs:
         quality=QUALITY_HIGH,
         uncalibrated=False,
         allow_uncalibrated=False,
+        win_model="betfair",
+        max_win_price=51.0,
+        drz_exchange_place=1.14,      # the exchange agrees
     )
     args.update(kw)
     return TierInputs(**args)
+
+
+def has(res, token: str) -> bool:
+    """True when any blocker carries this reason token, whatever the order."""
+    return any(token in r for r in res.reasons)
 
 
 def test_bet_requires_every_model_to_clear():
@@ -43,7 +59,8 @@ def test_bet_requires_every_model_to_clear():
 def test_one_model_short_is_watch_not_bet():
     res = decide_tier(base(drz_by_model={"betfair": 1.15, "sportsbet_power": 1.05}))
     assert res.tier == TIER_WATCH
-    assert "1/2 models" in res.reasons[0]
+    assert has(res, REASON_MODELS_SHORT)
+    assert "1/2 models" in " ".join(res.reasons)
 
 
 def test_watch_band():
@@ -64,17 +81,19 @@ def test_suspect_dominates_everything_else():
     assert res.tier == TIER_SUSPECT
 
 
-def test_ziemba_win_price_filter():
-    res = decide_tier(base(win_price=12.0))
+def test_win_price_cap_blocks_bet():
+    res = decide_tier(base(win_price=60.0))
     assert res.tier == TIER_WATCH
-    assert "above the 9.0 filter" in res.reasons[0]
-    assert decide_tier(base(win_price=12.0, max_win_odds=15.0)).tier == TIER_BET
+    assert has(res, REASON_BEYOND_CAP)
+    assert "51.0 cap" in " ".join(res.reasons)
+    assert decide_tier(base(win_price=60.0, max_win_price=101.0)).tier == TIER_BET
 
 
 def test_stale_price_blocks_bet():
     res = decide_tier(base(price_age_seconds=75.0))
     assert res.tier == TIER_WATCH
-    assert "75s old" in res.reasons[0]
+    assert has(res, REASON_STALE)
+    assert "75s old" in " ".join(res.reasons)
     assert decide_tier(base(price_age_seconds=None)).tier == TIER_WATCH
 
 
@@ -85,7 +104,7 @@ def test_quality_must_be_high():
 def test_uncalibrated_model_is_gated_unless_allowed():
     res = decide_tier(base(drz_by_model={"sportsbet_power": 1.20}, uncalibrated=True))
     assert res.tier == TIER_WATCH
-    assert "UNCALIBRATED" in res.reasons[0]
+    assert has(res, REASON_UNCALIBRATED)
     ok = decide_tier(base(drz_by_model={"sportsbet_power": 1.20},
                           uncalibrated=True, allow_uncalibrated=True))
     assert ok.tier == TIER_BET
@@ -94,14 +113,14 @@ def test_uncalibrated_model_is_gated_unless_allowed():
 def test_tote_indicative_price_is_never_a_bet():
     res = decide_tier(base(price_type="tote_indicative"))
     assert res.tier == TIER_WATCH
-    assert "indicative" in res.reasons[0]
+    assert has(res, REASON_INDICATIVE)
 
 
 def test_delayed_betfair_alone_cannot_bet_near_the_jump():
     near = decide_tier(base(drz_by_model={"betfair": 1.20},
                             betfair_delayed_only=True, seconds_to_jump=120))
     assert near.tier == TIER_WATCH
-    assert "DELAYED" in near.reasons[0]
+    assert has(near, REASON_DELAYED)
     far = decide_tier(base(drz_by_model={"betfair": 1.20},
                            betfair_delayed_only=True, seconds_to_jump=900))
     assert far.tier == TIER_BET

@@ -40,6 +40,17 @@ TIER_WATCH = "WATCH"
 TIER_SUSPECT = "SUSPECT"
 TIER_NONE = "—"
 
+#: Machine-readable tokens that open a blocker string, so a stored row can be
+#: grouped by *why* it was held back without parsing prose.
+REASON_BEYOND_CAP = "beyond_price_cap"
+REASON_NO_EXCHANGE = "no_exchange_confirmation"
+REASON_MODELS_SHORT = "below_threshold"
+REASON_STALE = "stale_price"
+REASON_QUALITY = "low_quality"
+REASON_UNCALIBRATED = "uncalibrated_model"
+REASON_DELAYED = "delayed_exchange_near_jump"
+REASON_INDICATIVE = "indicative_price"
+
 QUALITY_HIGH = "HIGH"
 QUALITY_MEDIUM = "MEDIUM"
 QUALITY_LOW = "LOW"
@@ -55,13 +66,23 @@ class TierInputs:
     quality: str
     uncalibrated: bool
     allow_uncalibrated: bool
+    #: The model that priced this row — the cap depends on it.
+    win_model: str = ""
+    #: The cap that applies to ``win_model``, already resolved, plus the
+    #: one-line justification shown in the blocker.
+    max_win_price: float = 9.0
+    max_win_price_reason: str = ""
+    #: Dr Z computed from the Betfair "To Be Placed" market, when a market
+    #: with matching place terms existed. ``None`` means no confirmation was
+    #: available, which is itself a blocker.
+    drz_exchange_place: float | None = None
+    require_exchange_confirmation: bool = True
     price_type: str = "fixed"
     betfair_delayed_only: bool = False
     seconds_to_jump: float | None = None
     drz_min: float = 1.10
     drz_watch_min: float = 1.03
     drz_suspect: float = 1.30
-    max_win_odds: float = 9.0
     max_price_age_seconds: int = 60
     delayed_no_bet_window_seconds: int = 300
 
@@ -98,7 +119,8 @@ def decide_tier(inp: TierInputs) -> TierResult:
     if inp.price_type != "fixed":
         return TierResult(
             TIER_WATCH if best >= inp.drz_watch_min else TIER_NONE,
-            [f"price type {inp.price_type!r} is indicative, not a takeable fixed price"],
+            [f"{REASON_INDICATIVE}: price type {inp.price_type!r} is "
+             f"indicative, not a takeable fixed price"],
         )
 
     n_clearing = sum(1 for v in values if v >= inp.drz_min)
@@ -107,31 +129,53 @@ def decide_tier(inp: TierInputs) -> TierResult:
     blockers: list[str] = []
     if not all_clear:
         blockers.append(
-            f"drz clears {inp.drz_min:.2f} under {n_clearing}/{len(values)} models"
+            f"{REASON_MODELS_SHORT}: drz clears {inp.drz_min:.2f} under "
+            f"{n_clearing}/{len(values)} models"
         )
-    if inp.win_price > inp.max_win_odds:
+    if inp.win_price > inp.max_win_price:
         blockers.append(
-            f"win price {inp.win_price:.2f} above the {inp.max_win_odds:.1f} filter"
+            f"{REASON_BEYOND_CAP}: win price {inp.win_price:.2f} is beyond the "
+            f"{inp.max_win_price:.1f} cap for {inp.win_model or 'this model'}"
+            + (f" ({inp.max_win_price_reason})" if inp.max_win_price_reason else "")
         )
+    # The exchange's own place market is the only independent check on a
+    # model that was fitted to win prices. Measured over 436k runners,
+    # model-only signals priced against exchange place prices less a 10-15%
+    # margin returned 0.80-0.88 per $1 staked: when the model and the
+    # exchange disagree, the exchange has been right.
+    if inp.require_exchange_confirmation:
+        if inp.drz_exchange_place is None:
+            blockers.append(
+                f"{REASON_NO_EXCHANGE}: no Betfair place market with matching "
+                f"terms to confirm this"
+            )
+        elif inp.drz_exchange_place < inp.drz_min:
+            blockers.append(
+                f"{REASON_NO_EXCHANGE}: exchange place market makes this "
+                f"{inp.drz_exchange_place:.3f}, below {inp.drz_min:.2f}"
+            )
     if inp.price_age_seconds is None:
-        blockers.append("price age unknown")
+        blockers.append(f"{REASON_STALE}: price age unknown")
     elif inp.price_age_seconds >= inp.max_price_age_seconds:
         blockers.append(
-            f"price is {inp.price_age_seconds:.0f}s old "
+            f"{REASON_STALE}: price is {inp.price_age_seconds:.0f}s old "
             f"(limit {inp.max_price_age_seconds}s)"
         )
     if inp.quality != QUALITY_HIGH:
-        blockers.append(f"quality {inp.quality}")
+        blockers.append(f"{REASON_QUALITY}: quality {inp.quality}")
     if inp.uncalibrated and not inp.allow_uncalibrated:
-        blockers.append("win model UNCALIBRATED (use --allow-uncalibrated to override)")
+        blockers.append(
+            f"{REASON_UNCALIBRATED}: win model UNCALIBRATED "
+            f"(use --allow-uncalibrated to override)"
+        )
     if (
         inp.betfair_delayed_only
         and inp.seconds_to_jump is not None
         and inp.seconds_to_jump <= inp.delayed_no_bet_window_seconds
     ):
         blockers.append(
-            f"only a DELAYED Betfair price supports this inside "
-            f"{inp.delayed_no_bet_window_seconds}s of the jump"
+            f"{REASON_DELAYED}: only a DELAYED Betfair price supports this "
+            f"inside {inp.delayed_no_bet_window_seconds}s of the jump"
         )
 
     if not blockers:

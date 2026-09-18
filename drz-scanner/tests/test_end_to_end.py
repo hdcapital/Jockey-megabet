@@ -22,7 +22,12 @@ from app.database import models as m
 from app.database.repository import Repository, session_factory
 from app.engine import NoPlaceMarketError, value_race
 from app.reporting.tables import render_scan
-from app.scoring import TIER_BET, TIER_SUSPECT
+from app.scoring import (
+    REASON_NO_EXCHANGE,
+    REASON_UNCALIBRATED,
+    TIER_BET,
+    TIER_SUSPECT,
+)
 from app.sources.base import MeetingInfo
 from app.sources.sportsbet import parse_racecard
 
@@ -82,11 +87,23 @@ def test_uncalibrated_rows_cannot_reach_bet(fixture, settings, calibration):
     target = next(v for v in vals if v.saddlecloth == 3)
     assert target.drz > settings.drz_min
     assert target.tier == "WATCH"
-    assert any("UNCALIBRATED" in r for r in target.tier_reasons)
+    assert any(REASON_UNCALIBRATED in r for r in target.tier_reasons)
     assert target.suggested_stake is None
 
+    # Lifting the uncalibrated gate is not enough on its own: with no
+    # exchange place market to confirm it, the row is still held at WATCH.
     allowed = value_race(race, calibration, settings, now=NOW, allow_uncalibrated=True)
     target = next(v for v in allowed if v.saddlecloth == 3)
+    assert target.tier == "WATCH"
+    assert any(REASON_NO_EXCHANGE in r for r in target.tier_reasons)
+
+    # With a confirming exchange place price it reaches BET.
+    confirmed = value_race(
+        race, calibration, settings, now=NOW, allow_uncalibrated=True,
+        betfair_place_probs={race.runners[2].source_id: 0.50},   # 0.50*2.55 = 1.275
+    )
+    target = next(v for v in confirmed if v.saddlecloth == 3)
+    assert target.drz_exchange_place == pytest.approx(0.50 * 2.55)
     assert target.tier == TIER_BET
     assert target.suggested_stake and target.suggested_stake > 0
 

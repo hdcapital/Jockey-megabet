@@ -129,6 +129,31 @@ def betfair_win_probabilities(
     )
 
 
+def max_win_price_for(
+    win_model: str, betfair_delayed: bool, settings
+) -> tuple[float, str]:
+    """The win-price cap that applies to a model, and why.
+
+    Betfair-derived probabilities stay calibrated far further out than
+    Sportsbet-derived ones, so a single global cutoff would either throw away
+    sound exchange-priced runners or admit unsound bookmaker-priced ones.
+    """
+    if win_model == WIN_MODEL_BETFAIR:
+        if betfair_delayed:
+            return (
+                settings.max_win_price_betfair_delayed,
+                "delayed exchange prices carry no matched volume",
+            )
+        return (
+            settings.max_win_price_betfair,
+            "exchange win probabilities are calibrated to about $51",
+        )
+    return (
+        settings.max_win_price_sportsbet,
+        "bookmaker win probabilities carry the longshot overround",
+    )
+
+
 def best_model(models: dict[str, WinProbabilitySet]) -> str | None:
     """The highest-priority model present in ``models``."""
     for name in MODEL_PRIORITY:

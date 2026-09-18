@@ -152,6 +152,8 @@ def render_race(
                 )
         if interesting and v.tier != TIER_BET and v.tier_reasons:
             note_bits.append(v.tier_reasons[0])
+        if v.band_shrink < 1.0:
+            note_bits.append(f"band x{v.band_shrink:.3f}")
         if v.price_type != "fixed":
             note_bits.append(f"{v.price_code} is indicative, not takeable")
         cells = [

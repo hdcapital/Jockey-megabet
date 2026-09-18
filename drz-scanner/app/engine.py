@@ -12,6 +12,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from app import MODEL_VERSION
 from app.calibration import Calibration
 from app.config import Settings
 from app.place_model import (
@@ -36,10 +37,26 @@ from app.winprob import (
     WinProbabilitySet,
     best_model,
     betfair_win_probabilities,
+    max_win_price_for,
     sportsbet_win_probabilities,
 )
 
 log = logging.getLogger(__name__)
+
+
+#: Which band table a model's probabilities may be corrected by. The table is
+#: measured per probability source; applying the Betfair-measured bands to
+#: Sportsbet-derived probabilities would be borrowing evidence that was never
+#: collected. ``None`` means "no band correction for this model yet".
+BAND_SOURCE = {
+    "betfair": "betfair",
+    "sportsbet_beta": None,
+    "sportsbet_power": None,
+}
+
+
+def band_source_for(win_model: str) -> str | None:
+    return BAND_SOURCE.get(win_model)
 
 
 class NoPlaceMarketError(Exception):
@@ -74,16 +91,25 @@ class PlaceValuation:
     p_place_by_model: dict[str, float]
     drz_by_model: dict[str, float]
     p_place: float | None
+    #: P(place) before the win-price band correction, and the factor applied.
+    #: Both are stored so a row can be recomputed either way later.
+    p_place_raw: float | None
+    band_shrink: float
     drz: float | None
     ev: float | None
     fair_place_odds: float | None
 
     p_place_betfair: float | None
+    drz_exchange_place: float | None
     betfair_delayed: bool
+    #: The cap that applied to this row's win model, and whether it bound.
+    max_win_price: float
+    beyond_price_cap: bool
 
     lam: float
     tau: float
     calibration_version: str
+    model_version: str
 
     tier: str
     tier_reasons: list[str] = field(default_factory=list)
@@ -155,19 +181,37 @@ def value_race(
     )
 
     # P(place) per model, then Dr Z per model.
+    #
+    # Two corrections sit on top of the place model, in this order:
+    #   1. the additive win-probability bucket correction (fitted by
+    #      likelihood, adopted only because it improved out-of-sample
+    #      log-loss), then
+    #   2. the multiplicative win-price band correction, clamped to <= 1 so
+    #      it can only ever shrink a probability.
+    # Neither is renormalised: renormalising would put back exactly the level
+    # shift each was adopted for.
     p_place_by_model: dict[str, list[float]] = {}
+    p_place_raw_by_model: dict[str, list[float]] = {}
+    shrink_by_model: dict[str, list[float]] = {}
     for name, mset in models.items():
         pp = place_probabilities(mset.probabilities, places, calibration.lam, calibration.tau)
-        # The model's own output must sum to the number of dividends. The
-        # bucket correction applied next is an additive per-runner shift and
-        # deliberately does not preserve that sum — see
-        # Calibration.correct_place_probability.
+        # The model's own output must sum to the number of dividends before
+        # either correction touches it.
         pp.check_sum(tol=1e-6)
         corrected = [
             calibration.correct_place_probability(q, p)
             for q, p in zip(mset.probabilities, pp.p_place)
         ]
-        p_place_by_model[name] = corrected
+        p_place_raw_by_model[name] = corrected
+        # The band table was measured on one probability source at a time, so
+        # it is only applied to the model it was measured on.
+        source = band_source_for(name)
+        shrink = [
+            calibration.shrink_factor(source, r.win_price) if source else 1.0
+            for r in active
+        ]
+        shrink_by_model[name] = shrink
+        p_place_by_model[name] = [c * f for c, f in zip(corrected, shrink)]
 
     chosen = best_model(models) or sb.win_model
 
@@ -194,6 +238,21 @@ def value_race(
 
         p_place = pp_by_model.get(chosen)
         drz = drz_by_model.get(chosen)
+        p_place_raw = p_place_raw_by_model[chosen][i] if chosen in models else None
+        shrink = shrink_by_model[chosen][i] if chosen in models else 1.0
+
+        # The exchange's own place market, valued the same way. This is the
+        # only check on the model that does not come from the model.
+        p_bf_place = (betfair_place_probs or {}).get(runner.source_id)
+        drz_exchange_place = (
+            drz_score(p_bf_place, place_price)
+            if p_bf_place is not None and place_price
+            else None
+        )
+        cap, cap_reason = max_win_price_for(
+            chosen, betfair_delayed and WIN_MODEL_BETFAIR in models, settings
+        )
+        beyond_cap = bool(runner.win_price and runner.win_price > cap)
         # "A delayed Betfair price ALONE upgrading this row" means: Betfair
         # is delayed, and without it nothing else here clears the BET bar.
         # Testing the number of models instead would never fire, because the
@@ -220,13 +279,17 @@ def value_race(
                 quality=quality,
                 uncalibrated=models[chosen].uncalibrated,
                 allow_uncalibrated=allow_uncalibrated,
+                win_model=chosen,
+                max_win_price=cap,
+                max_win_price_reason=cap_reason,
+                drz_exchange_place=drz_exchange_place,
+                require_exchange_confirmation=settings.require_exchange_confirmation,
                 price_type=runner.price_type,
                 betfair_delayed_only=delayed_only,
                 seconds_to_jump=seconds_to_jump,
                 drz_min=settings.drz_min,
                 drz_watch_min=settings.drz_watch_min,
                 drz_suspect=settings.drz_suspect,
-                max_win_odds=settings.max_win_odds,
                 max_price_age_seconds=settings.max_price_age_seconds,
                 delayed_no_bet_window_seconds=settings.betfair_delayed_no_bet_window_seconds,
             )
@@ -257,14 +320,20 @@ def value_race(
                 p_place_by_model=pp_by_model,
                 drz_by_model=drz_by_model,
                 p_place=p_place,
+                p_place_raw=p_place_raw,
+                band_shrink=shrink,
                 drz=drz,
                 ev=(drz - 1.0) if drz is not None else None,
                 fair_place_odds=fair_place_odds(p_place) if p_place else None,
-                p_place_betfair=(betfair_place_probs or {}).get(runner.source_id),
+                p_place_betfair=p_bf_place,
+                drz_exchange_place=drz_exchange_place,
                 betfair_delayed=betfair_delayed and WIN_MODEL_BETFAIR in models,
+                max_win_price=cap,
+                beyond_price_cap=beyond_cap,
                 lam=calibration.lam,
                 tau=calibration.tau,
                 calibration_version=calibration.version,
+                model_version=MODEL_VERSION,
                 tier=tier_res.tier,
                 tier_reasons=tier_res.reasons,
                 quality=quality,

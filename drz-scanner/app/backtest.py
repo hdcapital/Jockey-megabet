@@ -248,13 +248,20 @@ def _field_bucket(n: int) -> str:
     return "13+"
 
 
+#: The same bands the win-price cap and the band correction are measured on,
+#: so a backtest report lines up with the calibration that produced the rows.
+_PRICE_BANDS = ((2.0, "(1,2]"), (3.0, "(2,3]"), (5.0, "(3,5]"), (9.0, "(5,9]"),
+                (15.0, "(9,15]"), (21.0, "(15,21]"), (31.0, "(21,31]"),
+                (51.0, "(31,51]"), (101.0, "(51,101]"))
+
+
 def _price_bucket(p: float | None) -> str:
     if p is None:
         return DASH
-    for hi, label in ((3.0, "<3.0"), (5.0, "3.0-5.0"), (9.0, "5.0-9.0")):
-        if p < hi:
+    for hi, label in _PRICE_BANDS:
+        if p <= hi:
             return label
-    return ">9.0"
+    return "(101+]"
 
 
 def run_report(session, min_tier: str | None = None) -> None:
@@ -287,6 +294,17 @@ def run_report(session, min_tier: str | None = None) -> None:
     _group_report("ROI by win model", _by(rows, lambda r: r.win_model), console)
     _group_report("ROI by field size", _by(rows, lambda r: _field_bucket(r.active_runner_count)), console)
     _group_report("ROI by win-price band", _by(rows, lambda r: _price_bucket(r.win_price)), console)
+    _group_report("ROI by model version", _by(rows, lambda r: r.model_version or "?"), console)
+    beyond = [r for r in rows if r.beyond_price_cap]
+    if beyond:
+        n, roi, strike = _roi_row(beyond)
+        console.print(
+            f"[bold]Beyond the win-price cap[/bold]: {n} settled row(s) that the "
+            f"cap held at WATCH — strike {strike:.1%}, ROI {roi:+.1%} at flat $1. "
+            f"These are stored precisely so the cap itself can be tested; they "
+            f"were never BET signals."
+        )
+        console.print()
     calibration_report(rows)
 
     clv = [(r, closing_line_value(session, r)) for r in bets]

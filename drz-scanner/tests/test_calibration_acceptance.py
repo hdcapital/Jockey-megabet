@@ -337,6 +337,9 @@ def test_optimisers_do_not_depend_on_a_lucky_bracket(arrays):
         won=np.tile([True] + [False] * 4, (10, 1)),
         placed=np.tile([True, True, False, False, False], (10, 1)),
         place_bsp=np.full((10, 5), np.nan),
+        win_bsp=np.full((10, 5), 4.0),
+        best_back=np.full((10, 5), np.nan),
+        best_lay=np.full((10, 5), np.nan),
         names=np.full((10, 5), "", dtype=object),
         tab_numbers=np.tile([1, 2, 3, 4, -1], (10, 1)),
         n_runners=np.full(10, 4),
@@ -346,3 +349,108 @@ def test_optimisers_do_not_depend_on_a_lucky_bracket(arrays):
     )
     value = fit_win_exponent(flat)   # must not raise
     assert np.isfinite(value)
+
+
+# ---------------------------------------------------------------------------
+# Win-price band calibration
+# ---------------------------------------------------------------------------
+
+#: Independently measured on the full sample: actual place rate divided by
+#: modelled place probability, by Betfair win-price band.
+EXPECTED_BSP_BANDS = {
+    (1.0, 2.0): 0.97, (2.0, 3.0): 0.98, (3.0, 5.0): 0.99, (5.0, 9.0): 1.00,
+    (9.0, 15.0): 1.03, (15.0, 21.0): 1.02, (21.0, 31.0): 1.00,
+    (31.0, 51.0): 1.00, (51.0, 101.0): 0.99,
+}
+EXPECTED_LONGSHOT_CEILING = 0.90   # the (101+] band must be well below 1
+
+
+def test_bsp_band_table_reproduces_the_measured_numbers(arrays):
+    """The measurement the win-price cap rests on."""
+    from app.calibrate import bsp_bands
+
+    bands = {(b["lo"], b["hi"]): b for b in bsp_bands(arrays, 0.71, 0.70)}
+    assert set(EXPECTED_BSP_BANDS) <= set(bands), "a band is missing entirely"
+    for key, expected in EXPECTED_BSP_BANDS.items():
+        got = bands[key]["ratio"]
+        assert got == pytest.approx(expected, abs=0.02), (
+            f"band {key}: measured {got:.3f}, expected {expected:.2f}"
+        )
+    longshots = bands[(101.0, 1e9)]
+    assert longshots["ratio"] < EXPECTED_LONGSHOT_CEILING, (
+        f"the model must be visibly hot above $101, got {longshots['ratio']:.3f}"
+    )
+    assert longshots["n"] > 10_000
+
+
+def test_the_model_is_hot_below_three_dollars_and_flat_in_the_middle(arrays):
+    """The shape that justifies a shrink-only correction inside the cap."""
+    from app.calibrate import bsp_bands
+
+    bands = {(b["lo"], b["hi"]): b["ratio"] for b in bsp_bands(arrays, 0.71, 0.70)}
+    assert bands[(1.0, 2.0)] < 0.99, "short favourites are over-predicted"
+    assert bands[(2.0, 3.0)] < 1.0
+    for key in ((3.0, 5.0), (5.0, 9.0), (21.0, 31.0), (31.0, 51.0), (51.0, 101.0)):
+        assert 0.97 <= bands[key] <= 1.03, f"{key} should be close to flat"
+
+
+def test_live_style_band_table_agrees_with_the_bsp_one(arrays):
+    """Prices showing at the off tell the same story as the starting price."""
+    from app.calibrate import live_style_bands
+
+    bands = {(b["lo"], b["hi"]): b["ratio"] for b in live_style_bands(arrays, 0.71, 0.70)}
+    if not bands:
+        pytest.skip("no back/lay columns in this history")
+    for key in ((3.0, 5.0), (5.0, 9.0), (9.0, 15.0), (15.0, 21.0)):
+        assert bands[key] == pytest.approx(EXPECTED_BSP_BANDS[key], abs=0.03), key
+    assert bands[(101.0, 1e9)] < EXPECTED_LONGSHOT_CEILING
+
+
+def test_recommended_cap_is_derived_not_assumed(arrays):
+    """The cap comes out of the live-style table, on the training window."""
+    from app.calibrate import _subset, live_style_bands, recommended_cap, time_split
+    from app.config import Settings
+
+    split = time_split(arrays)
+    train = _subset(arrays, split.train)
+    bands = live_style_bands(train, 0.71, 0.70)
+    if not bands:
+        pytest.skip("no back/lay columns in this history")
+    cap = recommended_cap(bands)
+    assert cap is not None
+    assert cap >= 31.0, f"the bands should hold well past $31, got {cap}"
+    # The shipped configuration must not claim more than the data supports.
+    assert Settings().max_win_price_betfair <= cap, (
+        f"configured cap {Settings().max_win_price_betfair} exceeds the "
+        f"measured {cap}"
+    )
+
+
+def test_recommended_cap_stops_at_the_first_band_that_fails():
+    from app.calibrate import recommended_cap
+
+    holds = [
+        {"lo": 3.0, "hi": 5.0, "ratio": 0.99, "n": 1000},
+        {"lo": 5.0, "hi": 9.0, "ratio": 1.00, "n": 1000},
+        {"lo": 9.0, "hi": 15.0, "ratio": 0.93, "n": 1000},   # fails here
+        {"lo": 15.0, "hi": 21.0, "ratio": 1.00, "n": 1000},  # ignored
+    ]
+    assert recommended_cap(holds) == 9.0
+    # Bands below the search floor never decide the cap.
+    below = [{"lo": 1.0, "hi": 2.0, "ratio": 0.5, "n": 1000}] + holds
+    assert recommended_cap(below) == 9.0
+    # Nothing holds at all.
+    assert recommended_cap([{"lo": 3.0, "hi": 5.0, "ratio": 0.5, "n": 9}]) is None
+
+
+def test_shipped_band_table_matches_a_fresh_fit(arrays, calibration):
+    """data/calibration.json must be what this code produces."""
+    from app.calibrate import _subset, bsp_bands, time_split
+
+    fresh = {(b["lo"], b["hi"]): b["ratio"]
+             for b in bsp_bands(_subset(arrays, time_split(arrays).train), 0.71, 0.70)}
+    shipped = {(b["lo"], b["hi"]): b["ratio"]
+               for b in calibration.band_ratio["betfair"]}
+    assert set(fresh) == set(shipped)
+    for key in fresh:
+        assert shipped[key] == pytest.approx(fresh[key], abs=1e-3), key

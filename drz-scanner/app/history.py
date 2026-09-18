@@ -45,6 +45,15 @@ REQUIRED_COLUMNS = (
     "PLACE_BSP",
 )
 
+#: Columns used only for the live-style band table (a probability-space
+#: midpoint of the prices actually showing at the scheduled off). They are
+#: optional: a file without them still calibrates lam/tau, it just cannot
+#: produce the live-style table.
+OPTIONAL_COLUMNS = (
+    "BEST_AVAIL_BACK_AT_SCHEDULED_OFF",
+    "BEST_AVAIL_LAY_AT_SCHEDULED_OFF",
+)
+
 WINNER_TOKEN = "WINNER"
 
 
@@ -117,7 +126,8 @@ def _validate_header(columns, label: str) -> None:
 def _read_csv(buf, label: str) -> pd.DataFrame:
     df = pd.read_csv(buf, low_memory=False)
     _validate_header(df.columns, label)
-    return df[list(REQUIRED_COLUMNS)]
+    keep = list(REQUIRED_COLUMNS) + [c for c in OPTIONAL_COLUMNS if c in df.columns]
+    return df[keep]
 
 
 def read_files(paths: list[Path]) -> pd.DataFrame:
@@ -166,6 +176,9 @@ class RaceArrays:
     won: np.ndarray        # (R, N)
     placed: np.ndarray     # (R, N)
     place_bsp: np.ndarray  # (R, N), NaN where absent
+    win_bsp: np.ndarray    # (R, N) raw BSP win price, NaN where padded
+    best_back: np.ndarray  # (R, N) at the scheduled off, NaN where absent
+    best_lay: np.ndarray   # (R, N) at the scheduled off, NaN where absent
     names: np.ndarray      # (R, N) selection names, "" where padded
     tab_numbers: np.ndarray  # (R, N) TAB numbers, -1 where padded
     n_runners: np.ndarray  # (R,)
@@ -235,6 +248,16 @@ def prepare(df: pd.DataFrame, min_runners: int = 5) -> RaceArrays:
     won = np.zeros((n_races, max_n), dtype=bool)
     placed = np.zeros((n_races, max_n), dtype=bool)
     place_bsp = np.full((n_races, max_n), np.nan)
+    win_bsp = np.full((n_races, max_n), np.nan)
+    best_back = np.full((n_races, max_n), np.nan)
+    best_lay = np.full((n_races, max_n), np.nan)
+    win_bsp[row, col] = df["WIN_BSP"].to_numpy()
+    for column, target in (
+        ("BEST_AVAIL_BACK_AT_SCHEDULED_OFF", best_back),
+        ("BEST_AVAIL_LAY_AT_SCHEDULED_OFF", best_lay),
+    ):
+        if column in df.columns:
+            target[row, col] = pd.to_numeric(df[column], errors="coerce").to_numpy()
     names = np.full((n_races, max_n), "", dtype=object)
     tabs = np.full((n_races, max_n), -1, dtype=int)
     names[row, col] = df["SELECTION_NAME"].astype(str).to_numpy()
@@ -255,6 +278,9 @@ def prepare(df: pd.DataFrame, min_runners: int = 5) -> RaceArrays:
         won=won,
         placed=placed,
         place_bsp=place_bsp,
+        win_bsp=win_bsp,
+        best_back=best_back,
+        best_lay=best_lay,
         names=names,
         tab_numbers=tabs,
         n_runners=sizes,
@@ -298,6 +324,9 @@ def load_history(
         won=arrays.won[sel],
         placed=arrays.placed[sel],
         place_bsp=arrays.place_bsp[sel],
+        win_bsp=arrays.win_bsp[sel],
+        best_back=arrays.best_back[sel],
+        best_lay=arrays.best_lay[sel],
         names=arrays.names[sel],
         tab_numbers=arrays.tab_numbers[sel],
         n_runners=arrays.n_runners[sel],

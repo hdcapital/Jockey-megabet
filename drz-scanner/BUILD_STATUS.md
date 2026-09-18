@@ -2,7 +2,7 @@
 
 Built 2026-09-18. Python 3.11.15, Linux build environment.
 
-**Test suite: 290 passed, 3 skipped** (`python -m pytest`). The three skips
+**Test suite: 342 passed, 3 skipped** (`python -m pytest`). The three skips
 are the live Sportsbet tests, which cannot run here — see below.
 
 ---
@@ -75,6 +75,33 @@ into NaT, which the filters then drop. A naive `pd.to_datetime` raises, and
 a naive `errors="coerce"` would have silently dropped those meetings.
 
 ---
+
+## Win-price band calibration (verified on real data)
+
+The band table the win-price caps rest on was computed here, on the same
+44,856 races, and reproduces the independent result:
+
+| Band | (1,2] | (2,3] | (3,5] | (5,9] | (9,15] | (15,21] | (21,31] | (31,51] | (51,101] | (101+] |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **BSP, mine** | 0.97 | 0.98 | 0.99 | 1.00 | 1.03 | 1.02 | 1.00 | 1.00 | 0.99 | **0.84** |
+| BSP, independent | 0.97 | 0.98 | 0.99 | 1.00 | 1.03 | 1.02 | 1.00 | 1.00 | 0.99 | 0.84 |
+| **live-style, mine** | 0.96 | 0.99 | 0.99 | 1.00 | 1.03 | 1.02 | 1.02 | 0.99 | 0.97 | **0.85** |
+| live-style, independent | 0.97 | 0.98 | 0.99 | 1.00 | 1.03 | 1.02 | 1.00 | 1.00 | 0.96 | 0.83 |
+
+The BSP row matches to two decimals in every band. The live-style row needed
+one interpretation settled: **the 10% spread limit is a runner-level gate.**
+Gating whole races on it instead (requiring every runner in the book to be
+tight) keeps only 28% of races, and that selection moves the longshot band to
+0.90. Filtering per runner while still normalising over the whole book — the
+reading that matches the wording, and what the scanner itself does — gives
+0.85 against the independent 0.83. `app/calibrate.py` implements the
+runner-level reading and says so in `live_style_bands`.
+
+On the **training window** (what `app.calibrate` actually fits on) the
+live-style table puts `(51,101]` at 0.96, so the derived recommended cap is
+**51.0** — exactly the shipped `MAX_WIN_PRICE_BETFAIR`. It is reported, not
+applied: a recommendation below the configured value produces a warning and
+nothing else.
 
 ## NOT verified live — and exactly why
 
@@ -160,11 +187,17 @@ rather than what it suspects:
 prints, per code, how many selections carry a win price and how many carry a
 place price. Run it from an Australian machine and paste the output here.
 
-**3. Betfair with real credentials.** The adapter, the spread/liquidity
+**3. That any of this makes money.** The band table says the probabilities
+are trustworthy from about $3 to $51. It does not say a trustworthy
+probability will meet a place price generous enough to profit from, and
+widening the cap from $9 to $51 admits *more* candidate rows rather than
+better ones. The UNPROVEN banner is still up and still correct.
+
+**4. Betfair with real credentials.** The adapter, the spread/liquidity
 gates, the delayed-key detection and the place-market term matching are all
 unit-tested, but no live exchange session has been opened from this build.
 
-**4. A live scan table.** None exists. The table below is rendered from the
+**5. A live scan table.** None exists. The table below is rendered from the
 committed **test fixtures**, so the layout and arithmetic are real but the
 horses and prices are invented:
 
@@ -200,7 +233,7 @@ Note the first race: every Dr Z score is below 1.00 and the longshots score
 is what power de-vig buys — under proportional de-vig those tail runners
 would show large fictitious edges.
 
-**5. Results capture after a real race.** The whole capture-and-settle path
+**6. Results capture after a real race.** The whole capture-and-settle path
 is exercised against fixtures — a scan stores signals, the race resolves, a
 later scan captures the outcome, and the stored signals settle with the dead
 heat divided correctly (`tests/test_scan_results_capture.py`). What has not
@@ -222,7 +255,7 @@ specific reason:
 > many rows rest on that weaker evidence. The shape of a resulted racecard's
 > per-runner `result` field is **not live-verified**.
 
-**6. The `sportsbet_beta` win model — the fit itself IS verified, the
+**7. The `sportsbet_beta` win model — the fit itself IS verified, the
 inputs are not.** The join and the estimator were exercised against the real
 August 2026 history: 1,366 real races were joined on date + track + race
 number + TAB number with **zero unmatched**, and a planted exponent of 1.15

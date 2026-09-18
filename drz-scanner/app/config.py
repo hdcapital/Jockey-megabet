@@ -70,8 +70,35 @@ class Settings(BaseSettings):
     drz_min: float = 1.10          # BET threshold on p_place * place_price
     drz_watch_min: float = 1.03    # WATCH threshold
     drz_suspect: float = 1.30      # above this: never BET, archive and log
-    max_win_odds: float = 9.0      # Ziemba's win-price filter
     max_price_age_seconds: int = 60
+
+    # --- Maximum win price, per win model ----------------------------------
+    # The cap answers one question: out to what price are the win
+    # probabilities trustworthy? So it depends on where they came from.
+    #
+    # Measured on 44,856 AU thoroughbred races (Jan 2024 - Aug 2026), actual
+    # place rate divided by modelled place probability, by win-price band:
+    #
+    #   (1,2] 0.97  (2,3] 0.98  (3,5] 0.99  (5,9] 1.00  (9,15] 1.03
+    #   (15,21] 1.02  (21,31] 1.00  (31,51] 1.00  (51,101] 0.99  (101+] 0.84
+    #
+    # Under Betfair prices the model is calibrated from about $3 to $51, runs
+    # 2-3% hot below $3 and collapses above $101. The old 9.0 cutoff was only
+    # ever justified for Sportsbet-derived probabilities, where the longshot
+    # overround — not the place model — is what breaks down.
+    #
+    # None of this says an edge exists out there. It says only that the
+    # probabilities are worth acting on in that range.
+    max_win_price_betfair: float = 51.0
+    max_win_price_sportsbet: float = 9.0
+    # A delayed exchange key gives no matched volume, so the price is less
+    # trustworthy the further out you go; the cap is pulled in accordingly.
+    max_win_price_betfair_delayed: float = 21.0
+
+    # A BET must be confirmed by the exchange's own "To Be Placed" market.
+    # Measured over 436k runners, model-only signals priced against exchange
+    # place prices less a 10-15% margin returned 0.80-0.88 per $1 staked.
+    require_exchange_confirmation: bool = True
     bankroll: float = 1000.0
     kelly_fraction: float = 0.25   # quarter-Kelly
     stake_cap_per_bet_pct: float = 0.01

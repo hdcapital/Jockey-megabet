@@ -75,5 +75,63 @@ def test_overrides_reach_the_settings():
     settings = Settings()
     _apply_overrides(settings, build_parser().parse_args(["--min-drz", "1.25"]))
     assert settings.drz_min == 1.25
+
+
+def test_a_cli_override_may_lower_every_cap():
+    from app.config import Settings
+    from app.drz import _apply_overrides
+
+    settings = Settings()
     _apply_overrides(settings, build_parser().parse_args(["--max-win-odds", "6"]))
-    assert settings.max_win_odds == 6
+    assert settings.max_win_price_betfair == 6
+    assert settings.max_win_price_sportsbet == 6
+    assert settings.max_win_price_betfair_delayed == 6
+
+
+def test_a_cli_override_may_not_raise_a_cap_without_i_know():
+    """The caps come from a measurement, so widening one is not a flag away."""
+    from app.config import Settings
+    from app.drz import _apply_overrides
+
+    settings = Settings()
+    _apply_overrides(settings, build_parser().parse_args(["--max-win-odds", "200"]))
+    # Betfair's 51 and the delayed 21 are left alone; Sportsbet's 9 too.
+    assert settings.max_win_price_betfair == 51.0
+    assert settings.max_win_price_betfair_delayed == 21.0
+    assert settings.max_win_price_sportsbet == 9.0
+
+
+def test_i_know_allows_raising_a_cap():
+    from app.config import Settings
+    from app.drz import _apply_overrides
+
+    settings = Settings()
+    _apply_overrides(
+        settings, build_parser().parse_args(["--max-win-odds", "200", "--i-know"])
+    )
+    assert settings.max_win_price_betfair == 200
+    assert settings.max_win_price_sportsbet == 200
+
+
+def test_a_mixed_override_lowers_what_it_can_without_i_know():
+    """21 is below Betfair's 51 but above Sportsbet's 9: lower one, keep the other."""
+    from app.config import Settings
+    from app.drz import _apply_overrides
+
+    settings = Settings()
+    _apply_overrides(settings, build_parser().parse_args(["--max-win-odds", "21"]))
+    assert settings.max_win_price_betfair == 21
+    assert settings.max_win_price_betfair_delayed == 21
+    assert settings.max_win_price_sportsbet == 9.0, "9 must not be raised to 21"
+
+
+def test_exchange_confirmation_can_be_disabled_explicitly():
+    from app.config import Settings
+    from app.drz import _apply_overrides
+
+    settings = Settings()
+    assert settings.require_exchange_confirmation
+    _apply_overrides(
+        settings, build_parser().parse_args(["--no-exchange-confirmation"])
+    )
+    assert not settings.require_exchange_confirmation

@@ -139,17 +139,28 @@ class PlaceValuation(Base):
     #: Every model's Dr Z score, as JSON.
     drz_json: Mapped[str] = mapped_column(Text)
     p_place: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: P(place) before the win-price band correction, and the factor applied.
+    p_place_raw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    band_shrink: Mapped[float | None] = mapped_column(Float, nullable=True)
     drz: Mapped[float | None] = mapped_column(Float, nullable=True)
     ev: Mapped[float | None] = mapped_column(Float, nullable=True)
     fair_place_odds: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     #: Betfair's own place-market opinion, when a matching market existed.
     p_place_betfair: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: Dr Z from the exchange place market — the independent confirmation.
+    drz_exchange_place: Mapped[float | None] = mapped_column(Float, nullable=True)
     betfair_delayed: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: The cap that applied to this row's win model, and whether it bound.
+    max_win_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    beyond_price_cap: Mapped[bool] = mapped_column(Boolean, default=False)
 
     lam: Mapped[float] = mapped_column(Float)
     tau: Mapped[float] = mapped_column(Float)
     calibration_version: Mapped[str] = mapped_column(String(64))
+    #: Bumped whenever the valuation pipeline changes shape, so a backtest can
+    #: separate rows produced by different versions of the model.
+    model_version: Mapped[str] = mapped_column(String(32), default="")
 
     tier: Mapped[str] = mapped_column(String(16))
     tier_reasons: Mapped[str | None] = mapped_column(Text, nullable=True)

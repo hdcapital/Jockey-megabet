@@ -32,6 +32,7 @@ with `python -m pytest -m data`.
 
 | Quantity | Value |
 |---|---|
+| Model version stored with every row | **1.1** |
 | Discounted-Harville exponents `lam` / `tau` | **0.703 / 0.708** (shipped as 0.71 / 0.70) |
 | Out-of-sample log-loss of P(place), this model | **0.4999** |
 | Out-of-sample log-loss, plain Harville | **0.5062** |
@@ -40,6 +41,30 @@ with `python -m pytest -m data`.
 | Plain Harville's top place bucket: predicted vs actual | **0.94 vs 0.86** |
 | This model, runners with win probability > 0.5: predicted vs actual place | **0.89 vs 0.86** |
 | Global logistic recalibration of P(place) | slope **1.00**, intercept **0.00** — finds nothing |
+
+### Measured — how far out the probabilities hold
+
+Same sample, win probabilities from Betfair prices, `lam` 0.71 / `tau` 0.70.
+Actual place rate divided by modelled place probability, by win-price band:
+
+| Band | (1,2] | (2,3] | (3,5] | (5,9] | (9,15] | (15,21] | (21,31] | (31,51] | (51,101] | (101+] |
+|---|---|---|---|---|---|---|---|---|---|---|
+| BSP | 0.97 | 0.98 | 0.99 | 1.00 | 1.03 | 1.02 | 1.00 | 1.00 | 0.99 | **0.84** |
+| Live-style | 0.97 | 0.98 | 0.99 | 1.00 | 1.03 | 1.02 | 1.01 | 1.00 | 0.96 | **0.84** |
+
+"Live-style" repeats the measurement on the prices actually showing at the
+scheduled off — the probability-space midpoint of best back and best lay,
+counting only runners whose own relative spread is within 10%. It is the
+same picture, which is what makes the first row usable for a live tool.
+
+So under Betfair probabilities the model is **calibrated from about $3 to
+$51**, runs 2-3% hot below $3, and is badly hot above $101. That is the
+entire justification for the win-price caps below.
+
+**This says nothing about whether an edge exists at any price.** It says the
+probabilities are trustworthy in that range. Whether a trustworthy
+probability meets a generous enough place price is a separate question that
+only the backtester can answer, and it has not answered it yet.
 
 Three consequences follow directly, and they shape the whole tool:
 
@@ -168,7 +193,7 @@ Harville exactly.
 Each race's place probabilities sum to its number of dividends, to machine
 precision.
 
-One deliberate exception: after the model runs, an additive correction by
+Two deliberate exceptions, applied in this order and neither renormalised: after the model runs, an additive correction by
 win-probability bucket is applied (the `win_prob_bucket_correction` block in
 `calibration.json`). It exists because the model over-predicts the place
 chance of runners with a win probability above 0.5 by about three points —
@@ -179,11 +204,50 @@ a race's corrected probabilities a percent or two short of the dividend
 count; renormalising that away would undo the improvement, so it is left
 alone and documented here instead.
 
+Second, a **shrink-only win-price band correction**. `p_place` is multiplied
+by `min(1, band_ratio)` for the runner's price band, from the table above.
+It trims short favourites by 1-3% and is a no-op everywhere the model is
+already flat or cold. A band whose ratio exceeds 1 is *never* applied: scaling
+probabilities **up** on that evidence would manufacture edges out of sampling
+noise in exactly the bands where prices are longest and payoffs most skewed.
+Both the raw and corrected probabilities are stored, with the factor used.
+
+The band table was measured on exchange probabilities, so it is applied only
+to exchange-priced rows. Sportsbet-priced rows get no band correction until
+the same table can be built from our own stored prices with at least 300
+runners per band — at which point `app.calibrate` will report it, again
+without changing any configured value.
+
 ### 4. Score and tiers
+
+The **maximum win price depends on the win model**, because the cap is a
+statement about where that model's probabilities are trustworthy:
+
+| Win model | Cap | Why |
+|---|---|---|
+| `betfair` | **51.0** | exchange probabilities hold to about $51 (table above) |
+| `betfair`, delayed key | **21.0** | no matched volume to corroborate a long price |
+| `sportsbet_beta` | **9.0** | bookmaker probabilities carry the longshot overround |
+| `sportsbet_power` | **9.0** | same, and uncalibrated besides |
+
+The price tested is the Sportsbet **live win price**. The old flat 9.0 was
+only ever justified for Sportsbet-derived probabilities; applying it to
+exchange-derived ones threw away sound runners between $9 and $51.
+
+`--max-win-odds` may only **lower** these. Raising one needs `--i-know`,
+which says in the log that you are betting on probabilities nothing has
+validated. `python -m app.calibrate` re-derives the recommended cap from the
+live-style table and warns if it lands below what you have configured — it
+never raises your setting for you.
+
+A runner beyond the cap is still valued, still stored and still shown; the
+cap gates the **BET tier only**, holding such a row at WATCH with the reason
+`beyond_price_cap`. That is deliberate: the backtester needs those rows in
+order to test the cap itself.
 
 | Tier | Rule |
 |---|---|
-| **BET** | `drz >= DRZ_MIN` (1.10) under **every** available model, win price `<= 9.0` (Ziemba's filter), price under 60 s old, quality HIGH, win model not UNCALIBRATED unless `--allow-uncalibrated` |
+| **BET** | `drz >= DRZ_MIN` (1.10) under **every** available model, win price within the cap for its model, **a Betfair "To Be Placed" market with matching terms agreeing** (`drz >= DRZ_MIN` on the exchange's own place probability), price under 60 s old, quality HIGH, win model not UNCALIBRATED unless `--allow-uncalibrated` |
 | **WATCH** | `1.03 <= drz < 1.10`, or the BET bar cleared under only one of several models |
 | **SUSPECT** | `drz > 1.30` — **never** BET. Logged and archived. On a market this heavily margined, a score that high is a stale price, a scratching in flight, or a parse error |
 
@@ -191,12 +255,24 @@ Staking, display only: quarter-Kelly of `f = (drz-1)/(price-1)`, capped at 1%
 of `BANKROLL` per bet and 2% per race, floored to the cent so the cap cannot
 be exceeded by rounding. Tote-indicative rows never get a stake.
 
-### 5. Betfair second opinion
+### 5. Betfair place market — now a requirement, not just a second opinion
 
 Where a "To Be Placed" market exists **whose number of winners equals the
 place terms being valued**, its midpoint gives an independent place
-probability, shown alongside. A mismatch in terms means no second opinion
-rather than a misleading one.
+probability. A mismatch in terms means no second opinion rather than a
+misleading one.
+
+**A row can only reach BET if that market agrees**, i.e. the exchange's own
+place probability also clears `DRZ_MIN` against the Sportsbet place price.
+Model-only rows are held at WATCH with the reason `no_exchange_confirmation`.
+
+The evidence: over 436,000 runners, model-only signals priced against
+exchange place prices less a 10-15% margin returned **0.80-0.88 per $1**. The
+model is fitted to win prices; the exchange place market is the only check on
+it that does not come from it. When the two disagree, the exchange has been
+right.
+
+`--no-exchange-confirmation` removes the requirement and says so in the log.
 
 A **delayed application key** is supported: the adapter detects the missing
 matched volume, falls back to a tighter spread-only gate, tags those rows

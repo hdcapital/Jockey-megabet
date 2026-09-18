@@ -49,6 +49,14 @@ class Calibration:
     beta: float | None = None
     beta_n_races: int | None = None
     beta_fitted_on: str | None = None
+    #: Win-price band calibration, keyed by the probability source it was
+    #: measured on ("betfair", later "sportsbet"). Each entry is a list of
+    #: {lo, hi, ratio, n}: actual place rate divided by modelled place
+    #: probability for runners in that band.
+    band_ratio: dict[str, list[dict[str, float]]] = field(default_factory=dict)
+    #: Highest win price at which the bands still hold, derived by
+    #: app.calibrate. Advisory: it is reported, never applied automatically.
+    recommended_max_win_price: dict[str, float] = field(default_factory=dict)
     provenance: str = ""
     source_path: Path | None = None
     loaded_from_file: bool = False
@@ -66,6 +74,34 @@ class Calibration:
 
     def beta_usable(self, min_races: int) -> bool:
         return self.beta is not None and (self.beta_n_races or 0) >= min_races
+
+    def band_ratio_for(self, source: str, win_price: float | None) -> float | None:
+        """The measured actual/model place ratio for a runner's price band.
+
+        ``None`` when no band table exists for that probability source, or
+        the price falls outside every band. Callers must clamp to 1.0 before
+        applying it: this table may only ever shrink a probability.
+        """
+        if win_price is None:
+            return None
+        for band in self.band_ratio.get(source, []):
+            if band["lo"] < win_price <= band["hi"]:
+                return float(band["ratio"])
+        return None
+
+    def shrink_factor(self, source: str, win_price: float | None) -> float:
+        """``min(1.0, band_ratio)`` — the only form the band table is applied in.
+
+        A band whose ratio exceeds 1 means the model *under*-predicted there.
+        Scaling probabilities up on that evidence would manufacture edges out
+        of sampling noise in exactly the bands where the prices are longest
+        and the payoffs most skewed, so an over-performing band is treated as
+        a no-op instead.
+        """
+        ratio = self.band_ratio_for(source, win_price)
+        if ratio is None:
+            return 1.0
+        return min(1.0, ratio)
 
     def correct_place_probability(self, win_prob: float, p_place: float) -> float:
         """Apply the fitted win-probability-bucket correction, if any.
@@ -101,6 +137,10 @@ class Calibration:
             d["beta"] = self.beta
             d["beta_n_races"] = self.beta_n_races
             d["beta_fitted_on"] = self.beta_fitted_on
+        if self.band_ratio:
+            d["band_ratio"] = self.band_ratio
+        if self.recommended_max_win_price:
+            d["recommended_max_win_price"] = self.recommended_max_win_price
         return d
 
 
@@ -148,6 +188,8 @@ def load_calibration(path: Path | None = None) -> Calibration:
         beta=raw.get("beta"),
         beta_n_races=raw.get("beta_n_races"),
         beta_fitted_on=raw.get("beta_fitted_on"),
+        band_ratio=raw.get("band_ratio") or {},
+        recommended_max_win_price=raw.get("recommended_max_win_price") or {},
         provenance=raw.get("provenance", ""),
         source_path=path,
         loaded_from_file=True,

@@ -64,8 +64,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--race", type=int, default=None, help="only this race number")
     p.add_argument("--min-drz", type=float, default=None,
                    help="override DRZ_MIN, the BET threshold")
-    p.add_argument("--max-win-odds", type=float, default=None,
-                   help="override the Ziemba win-price filter")
+    p.add_argument("--max-win-odds", "--max-win-price", type=float, default=None,
+                   dest="max_win_odds",
+                   help="override the maximum win price for EVERY model. It may "
+                        "only LOWER a model's cap; raising one needs --i-know")
+    p.add_argument("--i-know", action="store_true",
+                   help="allow --max-win-odds to RAISE a cap above the measured "
+                        "calibrated range. The band table says the place model "
+                        "is only trustworthy to about $51 on exchange prices "
+                        "and $9 on bookmaker prices; beyond that you are "
+                        "betting on probabilities nothing has validated")
+    p.add_argument("--no-exchange-confirmation", action="store_true",
+                   help="drop the requirement that a Betfair place market with "
+                        "matching terms confirms a BET row")
     p.add_argument("--show-all", action="store_true",
                    help="show every runner, not just WATCH and above")
     p.add_argument("--no-db", action="store_true", help="do not write to the database")
@@ -77,10 +88,46 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _apply_overrides(settings, args) -> None:
+    """Apply CLI overrides, refusing to silently widen a measured limit.
+
+    The per-model win-price caps come from a measurement, so a single CLI
+    number may tighten them but not loosen them. Raising one takes --i-know,
+    and says so on the way past.
+    """
     if args.min_drz is not None:
         settings.drz_min = args.min_drz
-    if args.max_win_odds is not None:
-        settings.max_win_odds = args.max_win_odds
+    if getattr(args, "no_exchange_confirmation", False):
+        settings.require_exchange_confirmation = False
+        log.warning(
+            "exchange confirmation disabled: BET rows will no longer require a "
+            "Betfair place market to agree with the model"
+        )
+    if args.max_win_odds is None:
+        return
+    requested = args.max_win_odds
+    fields = (
+        "max_win_price_betfair",
+        "max_win_price_betfair_delayed",
+        "max_win_price_sportsbet",
+    )
+    raised = [f for f in fields if requested > getattr(settings, f)]
+    if raised and not getattr(args, "i_know", False):
+        for f in raised:
+            log.warning(
+                "--max-win-odds %.1f would RAISE %s from %.1f; ignored for that "
+                "model (pass --i-know to allow it)",
+                requested, f, getattr(settings, f),
+            )
+    for f in fields:
+        current = getattr(settings, f)
+        if requested <= current or getattr(args, "i_know", False):
+            setattr(settings, f, requested)
+    if raised and getattr(args, "i_know", False):
+        log.warning(
+            "--i-know: win-price cap raised to %.1f, beyond the range the band "
+            "table validates. Rows above the measured range rest on "
+            "probabilities nothing has checked.", requested,
+        )
 
 
 def _matches_filters(stub: RaceStub, args) -> bool:
