@@ -253,7 +253,10 @@ order to test the cap itself.
 
 Staking, display only: quarter-Kelly of `f = (drz-1)/(price-1)`, capped at 1%
 of `BANKROLL` per bet and 2% per race, floored to the cent so the cap cannot
-be exceeded by rounding. Tote-indicative rows never get a stake.
+be exceeded by rounding. The `drz` a stake is sized from is the **most
+conservative** estimate held — the worst model, or the exchange's own place
+market where it confirmed the row — never the best one. Tote-indicative rows
+never get a stake.
 
 ### 5. Betfair place market — now a requirement, not just a second opinion
 
@@ -276,8 +279,18 @@ right.
 
 A **delayed application key** is supported: the adapter detects the missing
 matched volume, falls back to a tighter spread-only gate, tags those rows
-`betfair_delayed`, and refuses to let a delayed price alone promote a row to
-BET inside the final five minutes before the jump.
+`betfair_delayed`, caps their win price at 21.0, and refuses to let a delayed
+price alone promote a row to BET inside the final five minutes before the
+jump. Outside that window a delayed row can be BET on the same terms as any
+other.
+
+Runners are matched to the exchange by **saddlecloth number** (Betfair names
+horses `"7. Zoustar"`), with the name as a check: a number hit under a
+different name is refused, because that is what a late runner replacement
+looks like.
+
+**Without Betfair credentials nothing can reach BET** — the confirmation
+requirement cannot be met. The scanner says so at startup.
 
 ---
 
@@ -296,9 +309,16 @@ python -m pytest -m data     # + the calibration acceptance test (needs the CSVs
 python -m pytest -m live     # + live Sportsbet checks (needs AU network access)
 ```
 
-In `--loop`, the full schedule is swept every 180 s and races within ten
-minutes of the jump refresh every ~40 s, all through the same per-host
-throttle. Do not lower `HTTP_MIN_REQUEST_INTERVAL_SECONDS`.
+In `--loop`, the full schedule is swept every 180 s. Between full sweeps,
+races within ten minutes of the jump are refreshed every ~40 s — only those
+races, from the cached schedule, so the near-jump cadence does not multiply
+the day's request count. Betfair books are refreshed on every sweep and
+refused if they are ever more than three minutes old. Everything goes through
+the same per-host throttle. Do not lower `HTTP_MIN_REQUEST_INTERVAL_SECONDS`.
+
+A log of every run is written to `data/logs/drz.log` (daily rotation, two
+weeks kept). Raw responses are archived gzipped under `data/raw/` and pruned
+to 14 days at startup.
 
 ---
 
@@ -315,6 +335,10 @@ throttle. Do not lower `HTTP_MIN_REQUEST_INTERVAL_SECONDS`.
 * **No backfill.** The backtester uses only observations captured live. A
   price you did not see at the time is not evidence about a signal you would
   have taken at the time.
+* **Scratchings are voids, not losses.** A runner scratched after it was
+  valued has its stake returned in the backtest, because that is what
+  Sportsbet does with a fixed-odds bet. Settling it as a loss would put a
+  phantom -100% into ROI for a bet that never happened.
 * **No inferred dead heats.** The race-level placings string is a finishing
   order and cannot express a dead heat, so one is never guessed from its
   length. Dead heats are resolved from per-runner finishing positions; where

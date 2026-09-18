@@ -37,16 +37,30 @@ DASH = "—"
 
 @dataclass
 class Settlement:
-    placed: bool
+    placed: bool | None          # None for a void
     dead_heat_divisor: float
     gross_return: float
     deduction_status: str
     basis: str
+    void: bool = False
 
 
 #: Settlement basis, stored so a backtest row can always say what it knew.
 BASIS_POSITIONS = "finish_positions"
 BASIS_PLACINGS = "placings_string"
+BASIS_VOID = "scratched_refund"
+
+
+def settle_void(place_price: float | None) -> Settlement | None:
+    """A runner scratched after the bet was struck: stake refunded.
+
+    Sportsbet refunds a fixed-odds bet on a scratched runner, so the honest
+    return is exactly the stake, not zero. Settling it as a loss would put a
+    phantom -100% into every ROI figure for a bet that never happened.
+    """
+    if place_price is None:
+        return None
+    return Settlement(None, 1.0, 1.0, "not_applicable", BASIS_VOID, void=True)
 
 
 def settle_from_positions(
@@ -139,6 +153,7 @@ def settle_all(session) -> int:
     repo = Repository(session)
     n = 0
     position_cache: dict[int, dict[int, int]] = {}
+    scratched_cache: dict[int, set[int]] = {}
     for v in repo.unsettled_valuations():
         race = repo.race_by_id(v.race_id)
         runner = repo.runner_by_id(v.runner_id)
@@ -149,12 +164,20 @@ def settle_all(session) -> int:
         if positions is None:
             positions = repo.finish_positions(v.race_id)
             position_cache[v.race_id] = positions
-        s = settle_runner(
-            runner.saddlecloth, placings, v.places, v.place_price, positions=positions
-        )
+        scratched = scratched_cache.get(v.race_id)
+        if scratched is None:
+            scratched = repo.scratched_runner_ids(v.race_id)
+            scratched_cache[v.race_id] = scratched
+        if v.runner_id in scratched:
+            s = settle_void(v.place_price)
+        else:
+            s = settle_runner(
+                runner.saddlecloth, placings, v.places, v.place_price, positions=positions
+            )
         if s is None:
             continue
         v.settled = True
+        v.void = s.void
         v.placed = s.placed
         v.settled_return = s.gross_return
         v.dead_heat_divisor = s.dead_heat_divisor
@@ -197,12 +220,15 @@ def closing_line_value(session, valuation: m.PlaceValuation) -> float | None:
 # ---------------------------------------------------------------------------
 
 def _roi_row(rows: list[m.PlaceValuation]) -> tuple[int, float, float]:
+    """(n, ROI at flat $1, strike rate). Voids count in n and in ROI at a
+    return of exactly their stake; they are left out of the strike rate,
+    which is a question about races that were run."""
     n = len(rows)
     staked = float(n)
     returned = sum(r.settled_return or 0.0 for r in rows)
-    return n, returned / staked - 1.0 if staked else 0.0, sum(
-        1 for r in rows if r.placed
-    ) / n if n else 0.0
+    run = [r for r in rows if not r.void]
+    strike = sum(1 for r in run if r.placed) / len(run) if run else 0.0
+    return n, returned / staked - 1.0 if staked else 0.0, strike
 
 
 def _group_report(title: str, groups: dict, console: Console) -> None:
@@ -227,6 +253,7 @@ def calibration_report(rows: list[m.PlaceValuation]) -> None:
     table.add_column("n", justify="right")
     table.add_column("predicted", justify="right")
     table.add_column("actual", justify="right")
+    rows = [r for r in rows if not r.void]   # a void says nothing about P(place)
     for lo, hi in zip(edges[:-1], edges[1:]):
         sel = [r for r in rows if r.p_place is not None and lo <= r.p_place < hi]
         if not sel:
@@ -322,6 +349,10 @@ def run_report(session, min_tier: str | None = None) -> None:
     else:
         console.print("[dim]Closing-line value needs at least two captures per runner.[/dim]")
 
+    voids = [r for r in rows if r.void]
+    if voids:
+        console.print(f"[dim]{len(voids)} row(s) void: runner scratched after "
+                      f"valuation, stake refunded.[/dim]")
     dead_heats = [r for r in rows if (r.dead_heat_divisor or 1.0) != 1.0]
     if dead_heats:
         console.print(f"[dim]{len(dead_heats)} row(s) settled through a dead heat.[/dim]")

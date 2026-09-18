@@ -34,9 +34,22 @@ def get_engine(url: str | None = None):
     return create_engine(url)
 
 
+_ENGINES: dict[str, object] = {}
+
+
 def init_db(url: str | None = None):
-    engine = get_engine(url)
-    m.Base.metadata.create_all(engine)
+    """One engine per URL for the life of the process.
+
+    The scanner persists after every race of every sweep; building a fresh
+    engine and running ``create_all`` each time is pure overhead on SQLite
+    and would exhaust a connection pool on anything else.
+    """
+    url = url or get_settings().database_url
+    engine = _ENGINES.get(url)
+    if engine is None:
+        engine = get_engine(url)
+        m.Base.metadata.create_all(engine)
+        _ENGINES[url] = engine
     return engine
 
 
@@ -121,6 +134,7 @@ class Repository:
                 trainer_name=info.trainer_name,
                 barrier=info.barrier,
                 finish_position=info.finish_position,
+                scratched=(info.status == "scratched"),
             )
             self.s.add(row)
             self.s.flush()
@@ -129,6 +143,8 @@ class Repository:
             row.trainer_name = info.trainer_name or row.trainer_name
         if info.finish_position is not None:
             row.finish_position = info.finish_position
+        if info.status == "scratched":
+            row.scratched = True
         return row
 
     # -- observations ----------------------------------------------------
@@ -140,16 +156,24 @@ class Repository:
         observed_at: datetime,
         seconds_to_jump: float | None,
         raw_sha256: str | None,
+        price_code: str = "L",
+        price_type: str | None = None,
+        win_price: float | None = None,
+        place_price: float | None = None,
     ) -> m.RunnerPrice:
+        """One observed price row. Defaults to the runner's live (L) price;
+        pass ``price_code``/``price_type`` and the prices to record an
+        indicative tote quote as its own row."""
+        live = price_code == "L"
         row = m.RunnerPrice(
             observed_at=_naive(observed_at),
             race_id=race.race_id,
             runner_id=runner.runner_id,
             source=info.source,
-            price_code="L",
-            price_type=info.price_type,
-            win_price=info.win_price,
-            place_price=info.place_price,
+            price_code=price_code,
+            price_type=price_type or info.price_type,
+            win_price=info.win_price if live else win_price,
+            place_price=info.place_price if live else place_price,
             status=info.status,
             seconds_to_jump=seconds_to_jump,
             raw_sha256=raw_sha256,
@@ -222,6 +246,12 @@ class Repository:
                 select(m.PlaceValuation).where(m.PlaceValuation.settled.is_(False))
             )
         )
+
+    def scratched_runner_ids(self, race_id: int) -> set[int]:
+        rows = self.s.scalars(
+            select(m.Runner).where(m.Runner.race_id == race_id, m.Runner.scratched.is_(True))
+        )
+        return {r.runner_id for r in rows}
 
     def finish_positions(self, race_id: int) -> dict[int, int]:
         """Saddlecloth -> finishing position for one race, where recorded."""

@@ -2,11 +2,13 @@
 setlocal
 rem ---------------------------------------------------------------------
 rem  drz-scanner - one click.
-rem  Installs requirements on first run, refreshes the calibration when it
-rem  is missing or stale, then starts the live loop. Display only: this
-rem  never places a bet.
+rem  Installs requirements on first run (and again whenever they change),
+rem  refreshes the calibration when it is missing or stale, then starts
+rem  the live loop. Display only: this never places a bet.
 rem ---------------------------------------------------------------------
 cd /d "%~dp0"
+set PYTHONUTF8=1
+set PYTHONIOENCODING=utf-8
 
 where py >nul 2>&1
 if errorlevel 1 (
@@ -18,8 +20,15 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if not exist ".installed" (
-  echo   First run: installing requirements...
+rem --- install (or re-install when requirements.txt has changed) --------
+set NEED_INSTALL=0
+if not exist ".installed" set NEED_INSTALL=1
+if exist ".installed" (
+  fc /b requirements.txt .installed >nul 2>&1
+  if errorlevel 1 set NEED_INSTALL=1
+)
+if "%NEED_INSTALL%"=="1" (
+  echo   Installing requirements...
   py -m pip install --upgrade pip
   py -m pip install -r requirements.txt
   if errorlevel 1 (
@@ -28,7 +37,7 @@ if not exist ".installed" (
     pause
     exit /b 1
   )
-  echo installed > .installed
+  copy /y requirements.txt .installed >nul
 )
 
 rem --- refresh the calibration if it is missing or older than 35 days ---
@@ -45,7 +54,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo   Starting the scanner. Ctrl-C to stop.
+echo   Starting the scanner. Ctrl-C to stop. Log: data\logs\drz.log
 echo.
 py -m app.drz --loop %*
 

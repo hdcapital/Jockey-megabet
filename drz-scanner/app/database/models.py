@@ -80,6 +80,10 @@ class Runner(Base):
     #: Finishing position, written once the race resolves. Two runners on the
     #: same position is the only unambiguous dead-heat signal.
     finish_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Set once the source has explicitly marked the runner out. A runner
+    #: scratched after a fixed-odds bet was struck is refunded, so the
+    #: settler needs to know the difference between "lost" and "never ran".
+    scratched: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class RunnerPrice(Base):
@@ -172,7 +176,9 @@ class PlaceValuation(Base):
 
     #: Settlement, written by the backtester only from stored placings.
     settled: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: True/False once run; None for a void (runner scratched after valuation).
     placed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    void: Mapped[bool] = mapped_column(Boolean, default=False)
     settled_return: Mapped[float | None] = mapped_column(Float, nullable=True)
     dead_heat_divisor: Mapped[float | None] = mapped_column(Float, nullable=True)
     deduction_status: Mapped[str | None] = mapped_column(String(24), nullable=True)

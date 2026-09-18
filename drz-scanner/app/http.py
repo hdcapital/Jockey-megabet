@@ -12,6 +12,7 @@ layer was exercised against live Sportsbet and Betfair endpoints.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import logging
@@ -219,7 +220,10 @@ class ArchivingClient:
             day_dir = self.archive_dir / self.source / result.fetched_at.strftime("%Y-%m-%d")
             day_dir.mkdir(parents=True, exist_ok=True)
             stamp = result.fetched_at.strftime("%H%M%S")
-            path = day_dir / f"{stamp}_{result.sha256[:12]}.json"
+            # Gzipped: a racecard is ~50 KB of JSON and a looping scanner
+            # fetches ~70 of them every few minutes. Uncompressed that is on
+            # the order of a gigabyte a day; gzipped it is a tenth of that.
+            path = day_dir / f"{stamp}_{result.sha256[:12]}.json.gz"
             meta = {
                 "source": self.source,
                 "url": result.url,
@@ -227,7 +231,7 @@ class ArchivingClient:
                 "http_status": result.status_code,
                 "sha256": result.sha256,
             }
-            with open(path, "wb") as fh:
+            with gzip.open(path, "wb") as fh:
                 fh.write(json.dumps(meta).encode())
                 fh.write(b"\n")
                 fh.write(result.body)
@@ -235,3 +239,53 @@ class ArchivingClient:
         except OSError as exc:  # archival must never take down a scan
             log.warning("raw archive write failed: %s", exc)
             return None
+
+
+def read_archive(path: Path | str) -> tuple[dict[str, Any], bytes]:
+    """``(meta, body)`` from an archive file, gzipped or (older) plain."""
+    path = Path(path)
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rb") as fh:
+        header = fh.readline()
+        body = fh.read()
+    return json.loads(header.decode()), body
+
+
+def prune_archive(root: Path, keep_days: int) -> int:
+    """Delete day-directories older than ``keep_days``. Returns files removed.
+
+    The archive exists so any displayed number can be traced to its bytes;
+    that need fades after a couple of weeks and the disk does not. Anything
+    that does not look like ``<source>/<YYYY-MM-DD>/`` is left alone.
+    """
+    from datetime import date, timedelta
+
+    if keep_days <= 0 or not root.exists():
+        return 0
+    cutoff = date.today() - timedelta(days=keep_days)
+    removed = 0
+    for source_dir in root.iterdir():
+        if not source_dir.is_dir():
+            continue
+        for day_dir in source_dir.iterdir():
+            if not day_dir.is_dir():
+                continue
+            try:
+                day = date.fromisoformat(day_dir.name)
+            except ValueError:
+                continue
+            if day >= cutoff:
+                continue
+            for f in day_dir.iterdir():
+                try:
+                    f.unlink()
+                    removed += 1
+                except OSError as exc:
+                    log.warning("archive prune: could not remove %s: %s", f, exc)
+            try:
+                day_dir.rmdir()
+            except OSError:
+                pass
+    if removed:
+        log.info("archive prune: removed %d file(s) older than %d days", removed, keep_days)
+    return removed

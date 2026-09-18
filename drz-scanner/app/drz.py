@@ -22,18 +22,22 @@ import time
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
+from app import MODEL_VERSION
 from app.calibration import load_calibration
 from app.config import get_settings
 from app.engine import NoPlaceMarketError, PlaceValuation, value_race
-from app.http import SourceUnavailableError
+from app.http import SourceUnavailableError, prune_archive
 from app.logging_setup import setup_logging
 from app.place_model import places_for_field
 from app.reporting.tables import console, render_scan
 from app.sources.base import RaceStub, SchemaMismatchError
 from app.sources.betfair import (
     BetfairClient,
+    BetfairMarket,
     BetfairNotConfiguredError,
+    normalise_runner_name,
     place_market_for,
+    venues_match,
 )
 from app.sources.sportsbet import SportsbetClient
 
@@ -161,48 +165,124 @@ def select_resulted_stubs(stubs: list[RaceStub], args) -> list[RaceStub]:
     ]
 
 
-def _betfair_inputs(bf_markets, race, places):
-    """Exchange win probabilities + place second opinion for one race.
+class BetfairSession:
+    """The exchange connection for one day: catalogue once, books every sweep.
+
+    The catalogue (which markets exist) changes rarely; the books (prices)
+    change constantly. Fetching the books once and reusing them for a whole
+    afternoon — which is what a naive "fetch at startup" does — scores every
+    later race on prices that are hours old while labelling them "betfair".
+    """
+
+    def __init__(self, for_date: date, settings):
+        self.settings = settings
+        self.for_date = for_date
+        self.client: BetfairClient | None = None
+        self.markets: list[BetfairMarket] = []
+        self.books_fetched_at: datetime | None = None
+        self.reason_unavailable: str | None = None
+        try:
+            self.client = BetfairClient()
+        except BetfairNotConfiguredError as exc:
+            self.reason_unavailable = str(exc)
+
+    @property
+    def configured(self) -> bool:
+        return self.client is not None
+
+    def refresh(self) -> None:
+        """Fetch the catalogue if we have none, then fresh books."""
+        if self.client is None:
+            return
+        try:
+            if not self.markets:
+                self.markets = self.client.list_au_markets(self.for_date)
+            for market in self.markets:
+                market.runners = []
+            self.client.fetch_market_books(self.markets)
+            self.books_fetched_at = datetime.now(timezone.utc)
+            self.reason_unavailable = None
+        except SourceUnavailableError as exc:
+            # Keep the previous books; the staleness gate below will refuse
+            # them once they are too old rather than silently reusing them.
+            self.reason_unavailable = str(exc)
+            log.error("betfair refresh failed, continuing on Sportsbet alone: %s", exc)
+
+    def stale(self, now: datetime) -> bool:
+        if self.books_fetched_at is None:
+            return True
+        age = (now - self.books_fetched_at).total_seconds()
+        return age > self.settings.max_price_age_seconds * 3
+
+    def close(self) -> None:
+        if self.client is not None:
+            self.client.close()
+
+
+def _match_quote(quotes, runner):
+    """The exchange quote for a Sportsbet runner: cloth number first, then name.
+
+    The saddlecloth is the join key both sides actually agree on. Names are
+    the fallback for a market whose runner names carry no prefix, and a
+    check when they do: a cloth-number hit with a different name is refused,
+    because that is what a late runner replacement looks like.
+    """
+    target_name = normalise_runner_name(runner.horse_name)
+    if runner.saddlecloth is not None:
+        for q in quotes:
+            if q.cloth_number == runner.saddlecloth:
+                if normalise_runner_name(q.runner_name) == target_name:
+                    return q
+                return None
+    for q in quotes:
+        if q.cloth_number is None and normalise_runner_name(q.runner_name) == target_name:
+            return q
+    return None
+
+
+def _betfair_inputs(bf: BetfairSession | None, race, places, now: datetime):
+    """Exchange win probabilities + place confirmation for one race.
 
     Returns ``(win_probs, reliable, delayed, place_probs)``; all ``None``
-    when no matching exchange market exists. Runner matching is by name only
-    after normalisation — an unmatched runner leaves a gap, which the win
-    model treats as "unusable", rather than being paired to a near-miss.
+    when there is no usable exchange market. A runner that cannot be matched
+    leaves a gap, which the win model treats as "unusable" rather than
+    pairing it to a near miss. Books older than three price-age limits are
+    refused outright.
     """
-    if not bf_markets:
+    if bf is None or not bf.markets:
         return None, None, False, None
-
-    def norm(s: str) -> str:
-        return "".join(ch for ch in (s or "").lower() if ch.isalnum())
+    if bf.stale(now):
+        log.warning("betfair books are stale (fetched %s); not used this sweep",
+                    bf.books_fetched_at)
+        return None, None, False, None
 
     active = race.active_runners()
     win_market = next(
         (
-            m for m in bf_markets
+            m for m in bf.markets
             if m.market_type == "WIN"
             and m.race_number == race.race_number
-            and norm(m.venue or "") == norm(race.venue or "")
+            and venues_match(m.venue, race.venue)
         ),
         None,
     )
     if win_market is None:
         return None, None, False, None
-    by_name = {norm(q.runner_name): q for q in win_market.runners}
-    quotes = [by_name.get(norm(r.horse_name)) for r in active]
+    quotes = [_match_quote(win_market.runners, r) for r in active]
     probs = [q.probability if q else None for q in quotes]
     reliable = [bool(q and q.reliable) for q in quotes]
     delayed = any(q.delayed for q in quotes if q)
 
     place_probs = None
-    pm = place_market_for(bf_markets, race.venue, race.race_number, places)
+    pm = place_market_for(bf.markets, race.venue, race.race_number, places)
     if pm is not None:
-        pmap = {norm(q.runner_name): q for q in pm.runners}
-        place_probs = {
-            r.source_id: pmap[norm(r.horse_name)].probability
-            for r in active
-            if norm(r.horse_name) in pmap
-            and pmap[norm(r.horse_name)].probability is not None
-        }
+        place_probs = {}
+        for r in active:
+            q = _match_quote(pm.runners, r)
+            # Only a quote that passed the spread/liquidity gate may confirm
+            # a bet. A thin or wide place quote is an opinion, not evidence.
+            if q is not None and q.probability is not None and q.reliable:
+                place_probs[r.source_id] = q.probability
     return probs, reliable, delayed, place_probs
 
 
@@ -254,14 +334,31 @@ def capture_results(stubs: list[RaceStub], sb: SportsbetClient, no_db: bool) -> 
     return captured
 
 
-def scan_once(args, settings, calibration, sb: SportsbetClient, bf_markets=None):
-    """One full pass. Returns ``(valuations_by_race, skipped_messages)``."""
-    for_date = args.date or racing_today()
-    _meetings, stubs, _raw = sb.fetch_schedule(for_date)
-    capture_results(select_resulted_stubs(stubs, args), sb, args.no_db)
-    selected = select_stubs(stubs, args)
-    log.info("valuing %d open races", len(selected))
+def scan_once(
+    args, settings, calibration, sb: SportsbetClient, bf=None,
+    stubs: list[RaceStub] | None = None, only_event_ids: set[str] | None = None,
+):
+    """One pass. Returns ``(valuations_by_race, skipped_messages, stubs)``.
 
+    A *full* sweep fetches the schedule and every open racecard. A *quick*
+    sweep (``stubs`` supplied, ``only_event_ids`` set) reuses the last
+    schedule and refetches only the races inside the near-jump window —
+    that is how the near-jump cadence stays inside the politeness budget
+    instead of multiplying the whole day's request count by four.
+    """
+    for_date = args.date or racing_today()
+    if stubs is None:
+        _meetings, stubs, _raw = sb.fetch_schedule(for_date)
+        capture_results(select_resulted_stubs(stubs, args), sb, args.no_db)
+    if bf is not None:
+        bf.refresh()
+    selected = select_stubs(stubs, args)
+    if only_event_ids is not None:
+        selected = [s for s in selected if s.event_id in only_event_ids]
+    log.info("valuing %d open races%s", len(selected),
+             " (near-jump refresh)" if only_event_ids is not None else "")
+
+    now = datetime.now(timezone.utc)
     by_race: list[list[PlaceValuation]] = []
     skipped: list[str] = []
     for stub in selected:
@@ -280,7 +377,7 @@ def scan_once(args, settings, calibration, sb: SportsbetClient, bf_markets=None)
 
         places = places_for_field(len(race.active_runners()))
         bf_win, bf_reliable, bf_delayed, bf_place = _betfair_inputs(
-            bf_markets, race, places
+            bf, race, places, now
         )
         try:
             valuations = value_race(
@@ -299,7 +396,7 @@ def scan_once(args, settings, calibration, sb: SportsbetClient, bf_markets=None)
         by_race.append(valuations)
         if not args.no_db:
             _persist(race, valuations)
-    return by_race, skipped
+    return by_race, skipped, stubs
 
 
 def _persist(race, valuations: list[PlaceValuation]) -> None:
@@ -328,15 +425,23 @@ def _persist(race, valuations: list[PlaceValuation]) -> None:
         for runner in race.runners:
             row = repo.upsert_runner(race_row, runner)
             by_source_id[runner.source_id] = row
-            repo.record_price(
-                race_row, row, runner,
-                observed_at=race.fetched_at or datetime.now(timezone.utc),
-                seconds_to_jump=(
-                    (race.start_time - (race.fetched_at or datetime.now(timezone.utc))).total_seconds()
-                    if race.start_time else None
-                ),
-                raw_sha256=race.raw_sha256,
+            observed = race.fetched_at or datetime.now(timezone.utc)
+            secs = (
+                (race.start_time - observed).total_seconds() if race.start_time else None
             )
+            repo.record_price(race_row, row, runner, observed_at=observed,
+                              seconds_to_jump=secs, raw_sha256=race.raw_sha256)
+            # Any indicative (tote-derivative) quote is kept too, as its own
+            # row with its own price code, so a later backtest of indicative
+            # against final dividends has something to work with.
+            for code, quote in runner.prices_by_code.items():
+                if quote.price_type == "tote_indicative":
+                    repo.record_price(
+                        race_row, row, runner, observed_at=observed,
+                        seconds_to_jump=secs, raw_sha256=race.raw_sha256,
+                        price_code=code, price_type=quote.price_type,
+                        win_price=quote.win_price, place_price=quote.place_price,
+                    )
         for v in valuations:
             runner_row = by_source_id.get(v.runner_source_id)
             if runner_row is not None:
@@ -358,40 +463,87 @@ def _settled_bet_count(no_db: bool) -> int:
         return 0
 
 
-def _betfair_markets(for_date: date):
-    """Exchange markets for the day, or ``None`` with the reason logged."""
-    try:
-        client = BetfairClient()
-    except BetfairNotConfiguredError as exc:
-        log.info("betfair: %s", exc)
-        return None, None
-    try:
-        markets = client.list_au_markets(for_date)
-        client.fetch_market_books(markets)
-        return markets, client
-    except SourceUnavailableError as exc:
-        log.error("betfair unavailable, continuing on Sportsbet alone: %s", exc)
-        client.close()
-        return None, None
+def _startup_notices(settings, bf: BetfairSession, log_path) -> None:
+    """Say up front what this run can and cannot do."""
+    console.print(f"[dim]drz-scanner model {MODEL_VERSION} · log {log_path or 'stderr only'}[/dim]")
+    if not bf.configured:
+        if settings.require_exchange_confirmation:
+            console.print(
+                "[bold yellow]No Betfair credentials.[/bold yellow] A BET needs a "
+                "Betfair place market to agree with the model, so [bold]no row can "
+                "reach BET on this run[/bold] — everything tops out at WATCH. "
+                "Add BETFAIR_APP_KEY / BETFAIR_USERNAME / BETFAIR_PASSWORD to .env, "
+                "or pass --no-exchange-confirmation to drop the requirement."
+            )
+        else:
+            console.print(
+                "[yellow]No Betfair credentials; exchange confirmation disabled by "
+                "flag. BET rows will rest on the model alone.[/yellow]"
+            )
+    elif not settings.require_exchange_confirmation:
+        console.print("[yellow]Exchange confirmation disabled by flag.[/yellow]")
+
+
+def _near_jump_ids(stubs: list[RaceStub], settings, now: datetime) -> set[str]:
+    """Open races inside the near-jump window, by event id."""
+    out = set()
+    for s in stubs:
+        if not s.is_open or s.start_time is None:
+            continue
+        secs = (s.start_time - now).total_seconds()
+        if -60 <= secs <= settings.near_jump_window_seconds:
+            out.add(s.event_id)
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    setup_logging(logging.DEBUG if args.verbose else logging.INFO)
     settings = get_settings()
+    log_path = setup_logging(
+        logging.DEBUG if args.verbose else logging.INFO, log_dir=settings.log_dir
+    )
     _apply_overrides(settings, args)
     calibration = load_calibration()
     for_date = args.date or racing_today()
+    prune_archive(settings.raw_archive_dir, settings.raw_archive_keep_days)
 
-    bf_markets, bf_client = _betfair_markets(for_date)
+    bf = BetfairSession(for_date, settings)
+    _startup_notices(settings, bf, log_path)
+    log.info(
+        "drz-scanner model %s starting: date=%s loop=%s db=%s betfair=%s "
+        "exchange_confirmation=%s caps(betfair/delayed/sportsbet)=%.0f/%.0f/%.0f "
+        "drz_min=%.2f calibration=%s",
+        MODEL_VERSION, for_date, args.loop, not args.no_db,
+        "configured" if bf.configured else "absent",
+        settings.require_exchange_confirmation,
+        settings.max_win_price_betfair, settings.max_win_price_betfair_delayed,
+        settings.max_win_price_sportsbet, settings.drz_min, calibration.version,
+    )
     exit_code = 0
+    stubs: list[RaceStub] | None = None
+    last_full = 0.0
     try:
         with SportsbetClient() as sb:
             while True:
                 started = time.monotonic()
+                now = datetime.now(timezone.utc)
+                quick_ids = (
+                    _near_jump_ids(stubs, settings, now)
+                    if stubs is not None and args.loop else set()
+                )
+                full_due = (started - last_full) >= settings.scan_interval_seconds
+                do_quick = args.loop and quick_ids and not full_due
                 try:
-                    by_race, skipped = scan_once(args, settings, calibration, sb, bf_markets)
+                    if do_quick:
+                        by_race, skipped, _ = scan_once(
+                            args, settings, calibration, sb, bf,
+                            stubs=stubs, only_event_ids=quick_ids,
+                        )
+                    else:
+                        by_race, skipped, stubs = scan_once(args, settings, calibration, sb, bf)
+                        last_full = time.monotonic()
                 except (SourceUnavailableError, SchemaMismatchError) as exc:
+                    log.error("scan failed: %s", exc)
                     console.print(f"[bold red]Scan failed:[/bold red] {exc}")
                     console.print(
                         "[dim]Nothing is displayed rather than anything invented. "
@@ -415,30 +567,29 @@ def main(argv: list[str] | None = None) -> int:
                 if not args.loop:
                     return exit_code
 
-                # Races inside the near-jump window get the short interval.
-                soonest = min(
-                    (
-                        v.seconds_to_jump
-                        for race in by_race for v in race
-                        if v.seconds_to_jump is not None and v.seconds_to_jump > 0
-                    ),
-                    default=None,
-                )
-                interval = (
-                    settings.near_jump_interval_seconds
-                    if soonest is not None and soonest <= settings.near_jump_window_seconds
-                    else settings.scan_interval_seconds
-                )
+                # Cadence: while any race is inside the near-jump window,
+                # quick sweeps of just those races every
+                # NEAR_JUMP_INTERVAL_SECONDS; otherwise wait for the next full
+                # sweep, which is due SCAN_INTERVAL_SECONDS after the last one
+                # started, so a slow sweep does not push the schedule out.
+                now = datetime.now(timezone.utc)
+                near = bool(stubs) and bool(_near_jump_ids(stubs, settings, now))
+                next_full_in = settings.scan_interval_seconds - (time.monotonic() - last_full)
+                if near:
+                    interval = min(settings.near_jump_interval_seconds, max(next_full_in, 0.0))
+                    label = "near-jump refresh"
+                else:
+                    interval = next_full_in
+                    label = "full sweep"
                 elapsed = time.monotonic() - started
                 wait = max(5.0, interval - elapsed)
-                console.print(f"[dim]next sweep in {wait:.0f}s (Ctrl-C to stop)[/dim]\n")
+                console.print(f"[dim]next {label} in {wait:.0f}s (Ctrl-C to stop)[/dim]\n")
                 time.sleep(wait)
     except KeyboardInterrupt:
         console.print("\n[dim]stopped[/dim]")
         return 0
     finally:
-        if bf_client is not None:
-            bf_client.close()
+        bf.close()
 
 
 if __name__ == "__main__":

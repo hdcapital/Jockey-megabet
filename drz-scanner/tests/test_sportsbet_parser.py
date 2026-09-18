@@ -165,3 +165,20 @@ def test_extract_prices_accepts_a_nested_decimal():
     ]})
     assert quotes["L"].win_price == 3.25
     assert quotes["L"].place_price == 1.55
+
+
+def test_a_resulted_racecard_does_not_scratch_everyone(fixture):
+    """Once the race has run every live price is withdrawn. Reading that as
+    'everyone was scratched' would refund every settled bet."""
+    race = parse_racecard(fixture("racecard_resulted_dead_heat.json"), event_id="900104")
+    assert race.status == "resulted"
+    statuses = {r.saddlecloth: r.status for r in race.runners}
+    assert statuses[10] == "scratched", "the explicit statusCode S is still honoured"
+    assert all(s == "active" for n, s in statuses.items() if n != 10)
+
+
+def test_an_open_racecard_still_scratches_on_a_missing_live_price(fixture):
+    race = parse_racecard(fixture("racecard_win_or_place.json"), event_id="820001")
+    assert race.status == "open"
+    scratched = next(r for r in race.runners if r.horse_name == "Scratchy Example")
+    assert scratched.status == "scratched"

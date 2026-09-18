@@ -310,7 +310,7 @@ def test_rows_beyond_the_cap_are_valued_stored_and_carry_the_reason(
             assert REASON_BEYOND_CAP in (s.tier_reasons or "")
             assert s.max_win_price == 51.0
             assert s.p_place is not None and s.p_place_raw is not None
-            assert s.model_version == "1.1"
+            assert s.model_version == "1.2"
 
 
 def test_the_cap_is_the_only_thing_holding_a_row_back_and_it_is_still_shown(

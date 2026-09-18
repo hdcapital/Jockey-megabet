@@ -2,7 +2,7 @@
 
 Built 2026-09-18. Python 3.11.15, Linux build environment.
 
-**Test suite: 342 passed, 3 skipped** (`python -m pytest`). The three skips
+**Test suite: 365 passed, 3 skipped** (`python -m pytest`). The three skips
 are the live Sportsbet tests, which cannot run here — see below.
 
 ---
@@ -75,6 +75,64 @@ into NaT, which the filters then drop. A naive `pd.to_datetime` raises, and
 a naive `errors="coerce"` would have silently dropped those meetings.
 
 ---
+
+## Pre-launch review (model 1.2)
+
+A full end-to-end read of the program as the last step before live use. It
+found the items below; every one is fixed and pinned by a test. Numbered on
+from the earlier bug list.
+
+**Would have mispriced or mis-settled live**
+
+13. **Exchange prices were fetched once at startup and never refreshed in
+    `--loop`.** Six hours in, "betfair" rows would have been scored on
+    start-of-day prices. The catalogue is now fetched once per day and the
+    *books* on every sweep, with a staleness gate: books older than three
+    price-age limits are refused outright rather than reused.
+14. **Delayed-key rows could never be BET.** `quality_for` downgraded them to
+    MEDIUM and BET needs HIGH — so the 21.0 delayed cap and the near-jump
+    rule were dead code. Delayed is now a note; its own two rules decide it.
+15. **Betfair runner names carry the cloth number (`"7. Zoustar"`).** The
+    matcher normalised that to `7zoustar` against Sportsbet's `zoustar`, so
+    no runner would ever have matched and the exchange model would never have
+    engaged. Runners are now joined on the cloth number, with the name as a
+    check (a number hit with a different name is refused — that is what a
+    late replacement looks like). Whether AU markets carry the prefix is
+    from knowledge of the Betfair API, **not verified live here**; both
+    forms are handled.
+16. **Thin or wide place quotes could confirm a BET.** Confirmation now
+    requires a quote that passed the spread/liquidity gate.
+17. **A runner scratched after valuation settled as a loser.** Sportsbet
+    refunds fixed-odds bets on scratchings; those rows are now void (stake
+    returned, excluded from the strike rate and the calibration report).
+18. **On a resulted racecard every runner looked scratched**, because every
+    live price is withdrawn once the race runs — so (17) could not even be
+    detected. The missing-price rule now applies only while a race is open.
+19. **Races that had already jumped but still showed `statusCode A` were
+    valued.** Skipped after a two-minute grace.
+20. **Stakes sized off the chosen (best) model's Dr Z.** BET requires every
+    model to clear, so the stake now sizes off the *worst* estimate held,
+    the exchange's included — staking hardest where the models disagree most
+    was exactly backwards.
+
+**Live robustness**
+
+21. Betfair session tokens expire in a long loop; one re-login on
+    `INVALID_SESSION_INFORMATION`, then fail.
+22. Venue match was exact, so "Sandown Hillside" never met "Sandown".
+23. Near-jump refreshes refetched the whole schedule; they now refetch only
+    the races inside the window, from the cached schedule.
+24. The raw archive grew ~1 GB/day uncompressed; now gzipped and pruned to
+    14 days at startup.
+25. A fresh SQLAlchemy engine (and `create_all`) per persist call; one per
+    URL now.
+26. No log file; a scan failure was only printed. `data/logs/drz.log`
+    rotates daily, keeps 14 days, and HTTP-library traces are kept out of it
+    (the exchange session token travels in a request header).
+27. Without Betfair credentials nothing can ever be BET — by design, but it
+    was discoverable only by waiting. It is now said at startup.
+28. `drz.bat` never re-installed when `requirements.txt` changed, and set
+    no UTF-8 mode for the console.
 
 ## Win-price band calibration (verified on real data)
 

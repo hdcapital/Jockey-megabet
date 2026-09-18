@@ -252,7 +252,10 @@ def quality_for(
     if n_models < 1:
         return QUALITY_LOW, notes + ["no win model available"]
     if betfair_delayed:
-        quality = QUALITY_MEDIUM if quality == QUALITY_HIGH else quality
+        # Delayed is handled by its own rules — the tighter 21.0 cap and the
+        # near-jump block — not by a blanket quality downgrade. Downgrading
+        # here would make every delayed row un-BET-able and turn those two
+        # rules into dead code.
         notes.append("Betfair prices are delayed")
     if terms_fragile:
         notes.append("exactly 8 active runners: one scratching drops this to 2 places")

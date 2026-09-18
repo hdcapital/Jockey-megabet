@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # --- Raw response archive ----------------------------------------------
     archive_raw_responses: bool = True
     raw_archive_dir: Path = DATA_DIR / "raw"
+    # Day-directories older than this are deleted when the scanner starts.
+    raw_archive_keep_days: int = 14
+    log_dir: Path = DATA_DIR / "logs"
 
     # --- Sportsbet ----------------------------------------------------------
     sportsbet_base_url: str = "https://www.sportsbet.com.au"

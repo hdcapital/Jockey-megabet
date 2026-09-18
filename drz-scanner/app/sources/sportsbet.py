@@ -282,11 +282,16 @@ def _truthy(value: Any) -> bool:
     return False
 
 
-def runner_status(node: dict[str, Any], live: PriceQuote | None) -> str:
-    """Scratched = statusCode "S", or isOut, or no live win price.
+def runner_status(
+    node: dict[str, Any], live: PriceQuote | None, race_open: bool = True
+) -> str:
+    """Scratched = statusCode "S", or isOut, or (in an open race) no live price.
 
     All three are honoured because any one of them alone has been observed to
     lag: a runner can carry statusCode "A" with its live price already gone.
+    The missing-price rule is only applied while the race is open — once it
+    has run, *every* runner's live price is withdrawn, and reading that as
+    "everyone was scratched" would turn each settled bet into a refund.
     """
     code = str(node.get("statusCode") or "").strip().upper()
     if code == "S":
@@ -300,7 +305,7 @@ def runner_status(node: dict[str, Any], live: PriceQuote | None) -> str:
             flat = v.replace(" ", "").replace("_", "").replace("-", "").lower()
             if any(w in flat for w in _SCRATCH_WORDS):
                 return "scratched"
-    if live is None or live.win_price is None:
+    if race_open and (live is None or live.win_price is None):
         return "scratched"
     return "active"
 
@@ -494,6 +499,21 @@ def parse_racecard(
         )
     market_name = " ".join(str(_first(market, "name", "marketName", default="")).lower().split())
 
+    status_raw = str(
+        _first(top, "bettingStatus", "status", "eventStatus", default="")
+    ).lower()
+    status_code = str(_first(top, "statusCode", default="")).strip().upper()
+    result_raw = _first(top, "result")
+    placings = parse_result_placings(result_raw)
+    if "abandon" in status_raw:
+        status = "abandoned"
+    elif status_code == "R" or placings or any(
+        w in status_raw for w in ("result", "settled", "final", "paid")
+    ):
+        status = "resulted"
+    else:
+        status = "open"
+
     runners: list[RunnerInfo] = []
     seen: set[str] = set()
     for sel in market.get("selections", []):
@@ -509,7 +529,7 @@ def parse_racecard(
 
         quotes = extract_prices(sel)
         live = quotes.get(LIVE_PRICE_CODE)
-        status = runner_status(sel, live)
+        rstatus = runner_status(sel, live, race_open=(status == "open"))
         jockey = _first(sel, "jockey", "jockeyName", "riderName", "rider")
         if isinstance(jockey, dict):
             jockey = _first(jockey, "name", "fullName")
@@ -527,7 +547,7 @@ def parse_racecard(
                 jockey_name=str(jockey).strip() if jockey else None,
                 trainer_name=str(trainer).strip() if trainer else None,
                 barrier=int(barrier) if isinstance(barrier, (int, float)) else None,
-                status=status,
+                status=rstatus,
                 finish_position=parse_finish_position(sel.get("result")),
                 win_price=live.win_price if live else None,
                 place_price=live.place_price if live else None,
@@ -541,21 +561,6 @@ def parse_racecard(
         raise SchemaMismatchError(
             SOURCE, f"racecard for event {event_id} parsed with no runners", archive_path
         )
-
-    status_raw = str(
-        _first(top, "bettingStatus", "status", "eventStatus", default="")
-    ).lower()
-    status_code = str(_first(top, "statusCode", default="")).strip().upper()
-    result_raw = _first(top, "result")
-    placings = parse_result_placings(result_raw)
-    if "abandon" in status_raw:
-        status = "abandoned"
-    elif status_code == "R" or placings or any(
-        w in status_raw for w in ("result", "settled", "final", "paid")
-    ):
-        status = "resulted"
-    else:
-        status = "open"
 
     active = [r for r in runners if r.is_active]
     if status == "open" and active and not any(r.place_price for r in active):

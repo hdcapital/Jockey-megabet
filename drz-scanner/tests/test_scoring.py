@@ -138,12 +138,20 @@ def test_exactly_eight_runners_is_flagged_fragile():
     assert not any("scratching" in n for n in clean)
 
 
-def test_quality_degrades_with_price_age_and_delay():
+def test_quality_degrades_with_price_age():
     assert quality_for(10.0, 60, 1, False, False)[0] == QUALITY_HIGH
     assert quality_for(90.0, 60, 1, False, False)[0] == QUALITY_MEDIUM
     assert quality_for(600.0, 60, 1, False, False)[0] == QUALITY_LOW
-    assert quality_for(10.0, 60, 1, True, False)[0] == QUALITY_MEDIUM
     assert quality_for(None, 60, 1, False, False)[0] == QUALITY_LOW
+
+
+def test_a_delayed_key_is_noted_but_does_not_downgrade_quality():
+    """BET needs HIGH quality. If delayed meant MEDIUM, no delayed row could
+    ever be BET and the delayed cap and the near-jump rule would be dead
+    code. Delayed has its own rules; quality is about the price's age."""
+    quality, notes = quality_for(10.0, 60, 1, True, False)
+    assert quality == QUALITY_HIGH
+    assert any("delayed" in n for n in notes)
 
 
 def test_score_arithmetic():
@@ -169,3 +177,18 @@ def test_per_race_stake_cap_scales_proportionally():
     assert capped == [pytest.approx(6.66)] * 3
     under = apply_race_stake_cap([5.0, 5.0], 1000.0, 0.02)
     assert under == [5.0, 5.0]
+
+
+def test_stakes_size_off_the_most_conservative_estimate():
+    """BET needs every model to clear; the stake must not use the best one."""
+    from app.engine import PlaceValuation, staking_drz
+
+    v = PlaceValuation.__new__(PlaceValuation)
+    v.drz_by_model = {"betfair": 1.25, "sportsbet_power": 1.12}
+    v.drz_exchange_place = 1.15
+    assert staking_drz(v) == 1.12
+    v.drz_exchange_place = 1.11
+    assert staking_drz(v) == 1.11
+    v.drz_by_model = {}
+    v.drz_exchange_place = None
+    assert staking_drz(v) is None

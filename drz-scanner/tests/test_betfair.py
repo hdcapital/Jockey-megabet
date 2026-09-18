@@ -120,3 +120,86 @@ def test_place_market_must_match_our_place_terms():
     assert place_market_for(markets, "Flemington", 5, 3) is None
     assert place_market_for(markets, "Flemington", 9, 3) is None
     assert place_market_for(markets, None, 4, 3) is None
+
+
+# -- runner-name prefix and session expiry ------------------------------------
+
+def test_market_books_parse_the_cloth_number_prefix(monkeypatch):
+    """Betfair names horses "7. Zoustar"; the number is the join key."""
+    from app.sources.betfair import BetfairClient
+
+    client = BetfairClient.__new__(BetfairClient)
+    from app.config import Settings
+
+    client.settings = Settings()
+    client.delayed_key_detected = False
+    market = BetfairMarket("1.1", "R1", "WIN", "Flemington", None, race_number=1,
+                           catalogue_runners={11: "7. Zoustar", 12: "Bare Name"})
+    monkeypatch.setattr(client, "_rpc", lambda *a, **k: [{
+        "marketId": "1.1", "status": "OPEN", "totalMatched": 5000.0,
+        "runners": [
+            {"selectionId": 11, "status": "ACTIVE", "totalMatched": 3000.0,
+             "ex": {"availableToBack": [{"price": 3.0, "size": 50}],
+                    "availableToLay": [{"price": 3.1, "size": 50}]}},
+            {"selectionId": 12, "status": "ACTIVE", "totalMatched": 2000.0,
+             "ex": {"availableToBack": [{"price": 6.0, "size": 50}],
+                    "availableToLay": [{"price": 6.2, "size": 50}]}},
+        ]}])
+    client.fetch_market_books([market])
+    by_id = {q.selection_id: q for q in market.runners}
+    assert by_id[11].cloth_number == 7 and by_id[11].runner_name == "7. Zoustar"
+    assert by_id[12].cloth_number is None
+
+
+def test_an_expired_session_is_renewed_once(monkeypatch):
+    from app.config import Settings
+    from app.sources.betfair import BetfairClient
+
+    client = BetfairClient.__new__(BetfairClient)
+    client.settings = Settings()
+    client._session_token = "stale"
+    logins = []
+    client.login = lambda: (logins.append(1), setattr(client, "_session_token", "fresh"))
+
+    calls = []
+
+    class Result:
+        def __init__(self, body):
+            self._body = body
+            self.status_code = 200
+
+        def json(self):
+            return self._body
+
+    def post_json(url, json_body=None, headers=None, data=None):
+        calls.append(headers["X-Authentication"])
+        if headers["X-Authentication"] == "stale":
+            return Result({"error": {"data": {"APINGException": {
+                "errorCode": "INVALID_SESSION_INFORMATION"}}}})
+        return Result({"result": [{"ok": True}]})
+
+    client.client = type("C", (), {"post_json": staticmethod(post_json)})()
+    assert client._rpc("listMarketBook", {}) == [{"ok": True}]
+    assert calls == ["stale", "fresh"]
+    assert len(logins) == 1
+
+
+def test_a_non_session_error_is_not_retried():
+    from app.config import Settings
+    from app.http import SourceUnavailableError
+    from app.sources.betfair import BetfairClient
+
+    client = BetfairClient.__new__(BetfairClient)
+    client.settings = Settings()
+    client._session_token = "t"
+    client.login = lambda: (_ for _ in ()).throw(AssertionError("must not re-login"))
+
+    class Result:
+        status_code = 200
+
+        def json(self):
+            return {"error": {"code": -32099, "message": "TOO_MUCH_DATA"}}
+
+    client.client = type("C", (), {"post_json": staticmethod(lambda *a, **k: Result())})()
+    with pytest.raises(SourceUnavailableError):
+        client._rpc("listMarketBook", {})

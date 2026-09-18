@@ -109,7 +109,16 @@ spread-only reliability gate, tags those rows `betfair_delayed`, and will not
 let a delayed price on its own make something a BET in the last five minutes
 before a jump.
 
-Without credentials, the scanner runs on Sportsbet alone and says so.
+Without credentials the scanner runs on Sportsbet alone, says so at startup,
+and — because a BET needs the exchange's place market to agree — **cannot
+show a BET row at all**. Everything tops out at WATCH until you add them.
+
+## The morning after a loop
+
+`data\logs\drz.log` has every sweep, every skipped race and every failure,
+one file per day, two weeks kept. `backtest.bat` settles whatever resolved
+and reports. Runners scratched after you saw them show as **void** (stake
+returned), not as losses.
 
 ## If a scan fails
 

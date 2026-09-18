@@ -360,3 +360,59 @@ def test_settle_runner_refuses_without_evidence():
     assert settle_runner(99, [1, 2, 3], 3, 2.0, positions={1: 1}).basis == BASIS_PLACINGS
     # ...and with neither source, nothing is settled.
     assert settle_runner(99, [], 3, 2.0, positions={1: 1}) is None
+
+
+def test_a_runner_scratched_after_valuation_settles_as_a_void(
+    fixture, settings, calibration, monkeypatch
+):
+    """Sportsbet refunds a fixed-odds bet on a scratching. Settling it as a
+    loss would put a phantom -100% into ROI for a bet that never happened."""
+    from app.backtest import BASIS_VOID
+
+    monkeypatch.setattr("app.config.get_settings", lambda: settings)
+    race = _race(fixture, "racecard_open_9_runners.json")
+    vals = value_race(race, calibration, settings, now=NOW, allow_uncalibrated=True)
+
+    Session = session_factory(settings.database_url)
+    with Session() as session:
+        repo = Repository(session)
+        meeting = repo.upsert_meeting(MeetingInfo(
+            source="sportsbet", source_id="5701", venue="Fixtureville",
+            meeting_date=NOW.date()))
+        race_row = repo.upsert_race(meeting, race)
+        rows = {r.source_id: repo.upsert_runner(race_row, r) for r in race.runners}
+        for v in vals:
+            repo.record_valuation(v, race_row, rows[v.runner_source_id])
+        session.commit()
+
+        # The race resolves; runner 4 was scratched after we valued it.
+        resulted = parse_racecard(fixture("racecard_resulted_dead_heat.json"),
+                                  event_id="900101", fetched_at=NOW)
+        for runner in resulted.runners:
+            if runner.saddlecloth == 4:
+                runner.status = "scratched"
+                runner.finish_position = None
+        repo.upsert_race(meeting, resulted)
+        for runner in resulted.runners:
+            repo.upsert_runner(race_row, runner)
+        session.commit()
+        assert settle_all(session) == 9
+
+        def row(saddle):
+            return next(v for v in session.query(m.PlaceValuation).all()
+                        if session.get(m.Runner, v.runner_id).saddlecloth == saddle)
+
+        void = row(4)
+        assert void.void and void.placed is None
+        assert void.settled_return == pytest.approx(1.0), "stake refunded"
+        assert void.settlement_basis == BASIS_VOID
+        assert not row(2).void and row(2).placed
+        assert not row(1).void and row(1).placed is False
+
+        # Strike rate ignores voids; ROI counts them at their stake.
+        from app.backtest import _roi_row
+
+        n, roi, strike = _roi_row([void, row(2), row(1)])
+        assert n == 3
+        assert strike == pytest.approx(0.5)
+        assert roi == pytest.approx((1.0 + row(2).place_price + 0.0) / 3 - 1.0)

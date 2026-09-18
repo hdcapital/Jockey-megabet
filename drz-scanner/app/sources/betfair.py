@@ -29,6 +29,7 @@ Disagreement is therefore displayed as a warning, never as an edge.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -52,6 +53,8 @@ class BetfairRunnerQuote:
     market_id: str
     selection_id: int
     runner_name: str
+    #: Saddlecloth parsed from the runner name, when Betfair supplied one.
+    cloth_number: int | None
     best_back: float | None
     best_lay: float | None
     back_volume: float | None
@@ -152,6 +155,48 @@ def derive_probability(
 
 
 _RACE_NO = re.compile(r"\s*R(\d+)")
+#: Betfair horse-racing runner names carry the saddlecloth: "7. Zoustar".
+_CLOTH_PREFIX = re.compile(r"^\s*(\d+)\.\s*(.+?)\s*$")
+#: Sportsbet appends origin/apprentice markers: "Zoustar (NZ)", "Name (a3)".
+_TRAILING_PAREN = re.compile(r"\s*\([^)]*\)\s*$")
+
+
+def split_runner_name(raw: str) -> tuple[int | None, str]:
+    """``"7. Zoustar"`` -> ``(7, "Zoustar")``; ``"Zoustar"`` -> ``(None, "Zoustar")``."""
+    m = _CLOTH_PREFIX.match(raw or "")
+    if m:
+        return int(m.group(1)), m.group(2)
+    return None, (raw or "").strip()
+
+
+def normalise_runner_name(raw: str) -> str:
+    """Lower-case alphanumerics only, cloth prefix and bracketed suffix gone.
+
+    Both sides of the Sportsbet/Betfair join go through this, so
+    ``"7. Zoustar"`` and ``"Zoustar (NZ)"`` meet at ``"zoustar"``.
+    """
+    _, name = split_runner_name(raw)
+    name = _TRAILING_PAREN.sub("", name)
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def normalise_venue(raw: str | None) -> str:
+    return "".join(ch for ch in (raw or "").lower() if ch.isalnum())
+
+
+def venues_match(a: str | None, b: str | None) -> bool:
+    """Equal after normalisation, or one is a prefix of the other.
+
+    Sportsbet writes "Sandown Hillside" where Betfair writes "Sandown"; the
+    race number and the day still have to agree, so a prefix match is safe.
+    """
+    na, nb = normalise_venue(a), normalise_venue(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    shorter, longer = sorted((na, nb), key=len)
+    return len(shorter) >= 4 and longer.startswith(shorter)
 
 
 class BetfairClient:
@@ -201,7 +246,7 @@ class BetfairClient:
         self._session_token = token
         log.info("betfair: login ok")
 
-    def _rpc(self, method: str, params: dict[str, Any]) -> Any:
+    def _rpc(self, method: str, params: dict[str, Any], _retry: bool = True) -> Any:
         if self._session_token is None:
             self.login()
         s = self.settings
@@ -221,6 +266,14 @@ class BetfairClient:
         )
         body = result.json()
         if "error" in body:
+            # A session token lasts hours, not days. In a long loop the first
+            # sign of expiry is this error code; one fresh login fixes it.
+            text = json.dumps(body["error"])
+            if _retry and ("INVALID_SESSION_INFORMATION" in text or "NO_SESSION" in text):
+                log.warning("betfair: session expired, logging in again")
+                self._session_token = None
+                self.login()
+                return self._rpc(method, params, _retry=False)
             raise SourceUnavailableError(
                 SOURCE, s.betfair_api_url, f"{method} error: {body['error']}"
             )
@@ -337,11 +390,14 @@ class BetfairClient:
                         delayed=delayed,
                         delayed_max_relative_spread=s.betfair_delayed_max_relative_spread,
                     )
+                    raw_name = market.catalogue_runners.get(r["selectionId"], "")
+                    cloth, _ = split_runner_name(raw_name)
                     market.runners.append(
                         BetfairRunnerQuote(
                             market_id=market.market_id,
                             selection_id=r["selectionId"],
-                            runner_name=market.catalogue_runners.get(r["selectionId"], ""),
+                            runner_name=raw_name,
+                            cloth_number=cloth,
                             best_back=best_back,
                             best_lay=best_lay,
                             back_volume=back_vol,
@@ -368,11 +424,10 @@ def place_market_for(
     """
     if venue is None or race_number is None:
         return None
-    target = venue.strip().lower()
     for m in markets:
         if m.market_type != "PLACE":
             continue
-        if (m.venue or "").strip().lower() != target:
+        if not venues_match(m.venue, venue):
             continue
         if m.race_number != race_number:
             continue

@@ -45,6 +45,12 @@ class FakeSportsbet:
 
     def fetch_schedule(self, for_date):
         meetings, stubs = parse_all_racing(self.load(self.schedule_name), for_date)
+        # The fixture pins startTime to a fixed epoch; the loop's near-jump
+        # window is measured against the real clock, so re-date open races
+        # the way a live schedule would carry them.
+        for s in stubs:
+            if s.is_open:
+                s.start_time = datetime.now(timezone.utc) + timedelta(minutes=15)
         return meetings, stubs, None
 
     def fetch_racecard(self, event_id):
@@ -52,9 +58,14 @@ class FakeSportsbet:
         name = self.racecards.get(event_id)
         if name is None:
             raise SchemaMismatchError("sportsbet", f"no fixture for {event_id}")
-        race = parse_racecard(self.load(name), event_id=event_id, fetched_at=NOW)
+        # Dated against the real clock: scan_once measures time-to-jump from
+        # now, and a race whose advertised start is hours past is skipped as
+        # already run (which is exactly what a fixture dated at a fixed NOW
+        # in the past would look like).
+        fetched = datetime.now(timezone.utc)
+        race = parse_racecard(self.load(name), event_id=event_id, fetched_at=fetched)
         if race.status == "open":
-            race.start_time = NOW + timedelta(minutes=15)
+            race.start_time = fetched + timedelta(minutes=15)
         return race
 
 
@@ -87,8 +98,9 @@ def test_a_scan_captures_the_result_of_a_race_it_valued(fixture, scan_env):
 
     # Scan one: the open race (900101) is valued and stored. The resulted
     # race (900104) is not one we hold, so nothing is captured for it.
-    by_race, _skipped = scan_once(args, settings, calibration, sb)
+    by_race, _skipped, stubs = scan_once(args, settings, calibration, sb)
     assert len(by_race) == 1
+    assert stubs, "a full sweep hands back the schedule for quick sweeps"
 
     Session = session_factory(settings.database_url)
     with Session() as session:
@@ -110,7 +122,7 @@ def test_a_scan_captures_the_result_of_a_race_it_valued(fixture, scan_env):
 
     sb2 = ResolvedSportsbet(fixture)
     sb2.racecards["900101"] = "racecard_resulted_dead_heat.json"
-    by_race, _skipped = scan_once(args, settings, calibration, sb2)
+    by_race, _skipped, _ = scan_once(args, settings, calibration, sb2)
     assert by_race == [], "a resulted race must not be valued"
 
     with Session() as session:
@@ -163,3 +175,47 @@ def test_the_scanner_uses_the_australian_date_not_the_utc_one():
     # And the two genuinely differ during the Australian morning.
     morning = datetime(2026, 9, 18, 23, 30, tzinfo=timezone.utc)
     assert morning.date() != morning.astimezone(ZoneInfo("Australia/Sydney")).date()
+
+
+def test_a_quick_sweep_reuses_the_schedule_and_refetches_only_near_jump_races(
+    fixture, scan_env
+):
+    """The near-jump cadence must not multiply the day's request count."""
+    settings, calibration = scan_env
+    args = build_parser().parse_args(["--allow-uncalibrated", "--no-db"])
+
+    class CountingSportsbet(FakeSportsbet):
+        def __init__(self, load):
+            super().__init__(load)
+            self.schedule_fetches = 0
+
+        def fetch_schedule(self, for_date):
+            self.schedule_fetches += 1
+            return super().fetch_schedule(for_date)
+
+    sb = CountingSportsbet(fixture)
+    by_race, _skipped, stubs = scan_once(args, settings, calibration, sb)
+    assert sb.schedule_fetches == 1
+    assert len(by_race) == 1
+    first_cards = list(sb.fetched)
+
+    # Quick sweep: the one open race is inside the window (15 min ahead is
+    # outside the default 10-minute window, so widen it for the test).
+    settings.near_jump_window_seconds = 20 * 60
+    from app.drz import _near_jump_ids
+
+    ids = _near_jump_ids(stubs, settings, datetime.now(timezone.utc))
+    assert ids == {"900101"}
+    by_race2, _skipped2, _ = scan_once(
+        args, settings, calibration, sb, stubs=stubs, only_event_ids=ids
+    )
+    assert sb.schedule_fetches == 1, "a quick sweep must not refetch the schedule"
+    assert sb.fetched == first_cards + ["900101"], "only the near-jump race is refetched"
+    assert len(by_race2) == 1
+
+    # And an empty near-jump set values nothing at all.
+    by_race3, _s, _ = scan_once(
+        args, settings, calibration, sb, stubs=stubs, only_event_ids=set()
+    )
+    assert by_race3 == []
+    assert sb.schedule_fetches == 1

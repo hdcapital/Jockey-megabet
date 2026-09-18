@@ -63,6 +63,17 @@ class NoPlaceMarketError(Exception):
     """The field is too small for a place market — a normal, reported state."""
 
 
+class RaceAlreadyJumpedError(NoPlaceMarketError):
+    """The advertised start has passed. Sportsbet's status flags can lag the
+    jump by a minute or two, and a price from a race that is being run is
+    not a price you can take."""
+
+
+#: Grace after the advertised start before a still-"open" race is skipped.
+#: Australian races routinely jump a minute or two late.
+JUMPED_GRACE_SECONDS = 120
+
+
 @dataclass
 class PlaceValuation:
     observed_at: datetime
@@ -179,6 +190,12 @@ def value_race(
     seconds_to_jump = (
         (race.start_time - now).total_seconds() if race.start_time else None
     )
+    if seconds_to_jump is not None and seconds_to_jump < -JUMPED_GRACE_SECONDS:
+        raise RaceAlreadyJumpedError(
+            f"{race.venue} R{race.race_number}: advertised start was "
+            f"{-seconds_to_jump:.0f}s ago and the race still shows as open — "
+            f"not valued"
+        )
 
     # P(place) per model, then Dr Z per model.
     #
@@ -358,6 +375,21 @@ def value_race(
     return out
 
 
+def staking_drz(v: PlaceValuation) -> float | None:
+    """The Dr Z a stake is sized from: the most conservative estimate we hold.
+
+    A BET requires every model to clear the threshold, so the stake should
+    be sized off the *worst* of them — and off the exchange's own place
+    market where one confirmed the row, since that has been the better
+    forecaster. Sizing off the most optimistic model would stake hardest
+    exactly where the models disagree most.
+    """
+    candidates = list(v.drz_by_model.values())
+    if v.drz_exchange_place is not None:
+        candidates.append(v.drz_exchange_place)
+    return min(candidates) if candidates else None
+
+
 def _apply_stakes(valuations: list[PlaceValuation], settings: Settings) -> None:
     """Quarter-Kelly stakes for BET rows only, then the per-race cap.
 
@@ -367,12 +399,13 @@ def _apply_stakes(valuations: list[PlaceValuation], settings: Settings) -> None:
     betting = [
         v for v in valuations
         if v.tier == "BET" and v.drz and v.place_price and v.price_type == "fixed"
+        and staking_drz(v)
     ]
     if not betting:
         return
     stakes = [
         suggest_stake(
-            v.drz, v.place_price, settings.bankroll,
+            staking_drz(v), v.place_price, settings.bankroll,
             settings.kelly_fraction, settings.stake_cap_per_bet_pct,
         )
         for v in betting
