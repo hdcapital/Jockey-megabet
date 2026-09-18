@@ -163,6 +163,17 @@ Harville exactly.
 Each race's place probabilities sum to its number of dividends, to machine
 precision.
 
+One deliberate exception: after the model runs, an additive correction by
+win-probability bucket is applied (the `win_prob_bucket_correction` block in
+`calibration.json`). It exists because the model over-predicts the place
+chance of runners with a win probability above 0.5 by about three points —
+0.892 predicted against 0.859 actual. The correction is only written into
+the file when it improves out-of-sample log-loss, which it did, marginally
+(0.499882 → 0.499708). Because it is an additive per-runner shift it leaves
+a race's corrected probabilities a percent or two short of the dividend
+count; renormalising that away would undo the improvement, so it is left
+alone and documented here instead.
+
 ### 4. Score and tiers
 
 | Tier | Rule |

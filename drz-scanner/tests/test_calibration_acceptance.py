@@ -183,3 +183,101 @@ def test_write_refuses_to_regress_out_of_sample_log_loss(tmp_path):
         write_calibration(worse, path)
     # ...unless forced.
     write_calibration(worse, path, force=True)
+
+
+def test_beta_fit_joins_real_races_and_recovers_a_known_exponent(tmp_path):
+    """The whole `sportsbet_beta` path, end to end, against real history.
+
+    Stored Sportsbet prices are invented — but they are invented from real
+    races, so the join (date + track + race number + TAB number) is exercised
+    against genuine track names and dates rather than against a mock. The
+    invented book is built so that its implied probabilities raised to a
+    known exponent reproduce the real BSP probabilities; the fit must find
+    that exponent back.
+    """
+    from datetime import datetime, timezone
+
+    import pandas as pd
+
+    from app.calibrate import fit_beta_from_stored_prices
+    from app.database.repository import Repository, session_factory
+    from app.sources.base import MeetingInfo, RaceInfo, RunnerInfo
+
+    try:
+        month = load_history(date(2026, 8, 1), date(2026, 8, 31),
+                             download_missing=False)
+    except HistoryUnavailableError as exc:
+        pytest.skip(f"history unavailable: {exc}")
+    assert month.n_races > 500
+
+    true_beta = 1.15
+    db_url = f"sqlite:///{tmp_path / 'beta.db'}"
+    Session = session_factory(db_url)
+    with Session() as session:
+        repo = Repository(session)
+        for ri in range(month.n_races):
+            key = month.keys.iloc[ri]
+            n = int(month.n_runners[ri])
+            q = month.q[ri][:n]
+            raw = q ** (1.0 / true_beta)
+            raw = raw / raw.sum() * 1.15          # add a realistic overround
+            prices = 1.0 / raw
+            meeting_date = pd.to_datetime(key["meeting_date"]).date()
+            start = datetime.combine(
+                meeting_date, datetime.min.time(), tzinfo=timezone.utc
+            )
+            meeting = repo.upsert_meeting(MeetingInfo(
+                source="sportsbet",
+                source_id=f"mt-{key['TRACK']}-{meeting_date}",
+                venue=str(key["TRACK"]), meeting_date=meeting_date,
+            ))
+            race_row = repo.upsert_race(meeting, RaceInfo(
+                source="sportsbet", source_id=f"race-{ri}",
+                race_number=int(key["RACE_NO"]), start_time=start,
+                status="open", fetched_at=start,
+            ))
+            for i in range(n):
+                info = RunnerInfo(
+                    source="sportsbet", source_id=f"race-{ri}-{i}",
+                    horse_name=f"Runner {ri}-{i}", saddlecloth=i + 1,
+                    win_price=float(prices[i]), place_price=2.0,
+                )
+                repo.record_price(
+                    race_row, repo.upsert_runner(race_row, info), info,
+                    observed_at=start, seconds_to_jump=60.0, raw_sha256=None,
+                )
+        session.commit()
+
+    fit = fit_beta_from_stored_prices(month, db_url=db_url)
+    assert fit.beta is not None, fit.detail
+    assert fit.n_races == month.n_races, "every stored race should have joined"
+    assert fit.n_unmatched_races == 0
+    assert fit.beta == pytest.approx(true_beta, abs=0.02), (
+        f"recovered {fit.beta}, planted {true_beta}"
+    )
+
+
+def test_optimisers_do_not_depend_on_a_lucky_bracket(arrays):
+    """A bracketed minimize_scalar raises when the bracket misses the minimum.
+
+    Both fits use bounded optimisation instead, so a degenerate input returns
+    a number at the boundary rather than aborting the whole calibration.
+    """
+    import numpy as np
+
+    from app.calibrate import fit_win_exponent
+    from app.history import RaceArrays
+
+    flat = RaceArrays(
+        q=np.tile([0.25, 0.25, 0.25, 0.25, 0.0], (10, 1)),
+        mask=np.tile([True] * 4 + [False], (10, 1)),
+        won=np.tile([True] + [False] * 4, (10, 1)),
+        placed=np.tile([True, True, False, False, False], (10, 1)),
+        place_bsp=np.full((10, 5), np.nan),
+        n_runners=np.full(10, 4),
+        places=np.full(10, 2),
+        dates=arrays.dates[:10],
+        keys=arrays.keys.iloc[:10].reset_index(drop=True),
+    )
+    value = fit_win_exponent(flat)   # must not raise
+    assert np.isfinite(value)

@@ -158,6 +158,10 @@ def value_race(
     p_place_by_model: dict[str, list[float]] = {}
     for name, mset in models.items():
         pp = place_probabilities(mset.probabilities, places, calibration.lam, calibration.tau)
+        # The model's own output must sum to the number of dividends. The
+        # bucket correction applied next is an additive per-runner shift and
+        # deliberately does not preserve that sum — see
+        # Calibration.correct_place_probability.
         pp.check_sum(tol=1e-6)
         corrected = [
             calibration.correct_place_probability(q, p)

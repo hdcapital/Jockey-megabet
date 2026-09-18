@@ -2,7 +2,7 @@
 
 Built 2026-09-18. Python 3.11.15, Linux build environment.
 
-**Test suite: 273 passed, 3 skipped** (`python -m pytest`). The three skips
+**Test suite: 275 passed, 3 skipped** (`python -m pytest`). The three skips
 are the live Sportsbet tests, which cannot run here — see below.
 
 ---
@@ -205,12 +205,14 @@ fixtures including a dead heat (`"2,5,3,9"`), and settlement divides the
 dividend among the runners sharing the tied position. No live resulted race
 has been observed by this build.
 
-**6. The `sportsbet_beta` win model.** It cannot exist until this scanner
-has stored ~1,500 races of its own prices — nobody sells historical
-Sportsbet prices. The fit, the join (date + track + race number + TAB
-number, name as a check) and the unmatched-race accounting are implemented
-and unit-tested; the model will switch itself on when the data is there.
-Until then every row is labelled **UNCALIBRATED** and cannot reach BET
+**6. The `sportsbet_beta` win model — the fit itself IS verified, the
+inputs are not.** The join and the estimator were exercised against the real
+August 2026 history: 1,366 real races were joined on date + track + race
+number + TAB number with **zero unmatched**, and a planted exponent of 1.15
+was recovered as 1.1473 (`test_beta_fit_joins_real_races_and_recovers_a_known_exponent`).
+What is missing is only the real input data —the model cannot switch on until this scanner has stored
+~1,500 races of its own Sportsbet prices, and nobody sells those
+historically. Until then every row is labelled **UNCALIBRATED** and cannot reach BET
 without `--allow-uncalibrated`.
 
 ---
@@ -236,10 +238,9 @@ without `--allow-uncalibrated`.
 * **End to end**: value → persist → render → settle, including a dead heat,
   on a temporary SQLite database.
 
-## Two bugs the tests caught during the build
+## Three bugs caught during the build
 
-Both were found by tests written against the specification, and both were
-fixed in the implementation rather than in the test:
+All three were fixed in the implementation, not worked around:
 
 1. **The per-race stake cap could be exceeded by rounding.** Three legs
    rounded to $6.67 summed to $20.01 against a $20.00 cap. Stakes are now
@@ -249,6 +250,13 @@ fixed in the implementation rather than in the test:
    occurred. Correct Australian practice divides only among the runners
    sharing the tied position: for placings `2,5,3,9` over three dividends,
    runners 2 and 5 are paid in full and only 3 and 9 are halved.
+3. **Both maximum-likelihood fits could abort on a bad bracket.**
+   `scipy.optimize.minimize_scalar(..., bracket=...)` raises `ValueError`
+   when the three bracket points do not straddle the minimum, which would
+   have taken down an entire calibration run over a detail of the starting
+   guess. Both now use bounded optimisation. Caught by running the beta fit
+   against real data for the first time; the win exponent is unchanged at
+   1.0125.
 
 ## To finish verification
 

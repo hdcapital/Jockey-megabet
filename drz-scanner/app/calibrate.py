@@ -138,7 +138,11 @@ def fit_win_exponent(a: RaceArrays) -> float:
         p = p / p.sum(axis=1, keepdims=True)
         return float(-np.log(np.maximum(p[a.won], 1e-300)).sum())
 
-    res = minimize_scalar(nll, bracket=(0.9, 1.0, 1.15))
+    # Bounded rather than bracketed: a bracket that happens not to straddle
+    # the minimum makes minimize_scalar raise, which would abort the whole
+    # calibration over a detail of the starting guess.
+    res = minimize_scalar(nll, bounds=(0.2, 3.0), method="bounded",
+                          options={"xatol": 1e-5})
     return float(res.x)
 
 
@@ -317,7 +321,8 @@ def fit_beta_from_stored_prices(a: RaceArrays, db_url: str | None = None) -> Bet
         p = p / p.sum(axis=1, keepdims=True)
         return float(-np.log(np.maximum(p[W], 1e-300)).sum())
 
-    res = minimize_scalar(nll, bracket=(0.8, 1.0, 1.3))
+    res = minimize_scalar(nll, bounds=(0.2, 3.0), method="bounded",
+                          options={"xatol": 1e-5})
     return BetaFit(
         beta=float(res.x),
         n_races=len(races),

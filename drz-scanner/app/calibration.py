@@ -68,7 +68,17 @@ class Calibration:
         return self.beta is not None and (self.beta_n_races or 0) >= min_races
 
     def correct_place_probability(self, win_prob: float, p_place: float) -> float:
-        """Apply the fitted win-probability-bucket correction, if any."""
+        """Apply the fitted win-probability-bucket correction, if any.
+
+        Note that this is an *additive, per-runner* adjustment, so a race's
+        corrected probabilities no longer sum exactly to its number of place
+        dividends — typically a percent or two short, because the correction
+        is negative for the strongest runners. That is deliberate. The
+        correction is adopted only when it improves out-of-sample log-loss,
+        and renormalising it away would remove the level shift that produced
+        the improvement. The engine checks the *uncorrected* probabilities
+        sum exactly before applying this.
+        """
         for bucket in self.win_prob_bucket_correction:
             if bucket["lo"] <= win_prob < bucket["hi"]:
                 return min(max(p_place + bucket["delta"], 1e-6), 1.0 - 1e-6)
