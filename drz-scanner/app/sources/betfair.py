@@ -280,63 +280,86 @@ class BetfairClient:
         return body.get("result")
 
     # -- markets ---------------------------------------------------------
+    #: listMarketCatalogue has a data-weight limit of 200 per request:
+    #: RUNNER_DESCRIPTION weighs 1 per market, MARKET_DESCRIPTION another 1.
+    #: A whole Australian day is ~100 races x 2 market types, so one request
+    #: for everything comes back TOO_MUCH_DATA. Ask per market type, with the
+    #: runner projection only (the type is known from the request), in time
+    #: windows small enough to stay under the limit.
+    CATALOGUE_WINDOW_HOURS = 6
+    CATALOGUE_MAX_RESULTS = 200
+
     def list_au_markets(
         self, for_date: date, market_types: tuple[str, ...] = ("WIN", "PLACE")
     ) -> list[BetfairMarket]:
         """Australian thoroughbred WIN and PLACE markets for a date."""
         start = datetime.combine(for_date, datetime.min.time(), tzinfo=timezone.utc)
-        catalogue = self._rpc(
-            "listMarketCatalogue",
-            {
-                "filter": {
-                    "eventTypeIds": ["7"],
-                    "marketCountries": ["AU"],
-                    "marketTypeCodes": list(market_types),
-                    "marketStartTime": {
-                        "from": (start - timedelta(hours=14)).isoformat(),
-                        "to": (start + timedelta(hours=38)).isoformat(),
-                    },
-                },
-                "marketProjection": [
-                    "EVENT", "MARKET_START_TIME", "RUNNER_DESCRIPTION",
-                    "MARKET_DESCRIPTION",
-                ],
-                "sort": "FIRST_TO_START",
-                "maxResults": 1000,
-            },
-        ) or []
+        window_from = start - timedelta(hours=14)
+        window_to = start + timedelta(hours=38)
+        seen: set[str] = set()
         markets: list[BetfairMarket] = []
-        for m in catalogue:
-            event = m.get("event") or {}
-            desc = m.get("description") or {}
-            start_str = m.get("marketStartTime")
-            name = m.get("marketName", "")
-            mm = _RACE_NO.match(name)
-            markets.append(
-                BetfairMarket(
-                    market_id=m["marketId"],
-                    market_name=name,
-                    market_type=str(desc.get("marketType") or "").upper()
-                    or ("PLACE" if "plac" in name.lower() else "WIN"),
-                    venue=event.get("venue") or event.get("name"),
-                    market_start=(
-                        datetime.fromisoformat(start_str.replace("Z", "+00:00"))
-                        if isinstance(start_str, str)
-                        else None
-                    ),
-                    race_number=int(mm.group(1)) if mm else None,
-                    number_of_winners=(
-                        int(m["numberOfWinners"])
-                        if isinstance(m.get("numberOfWinners"), (int, float))
-                        else None
-                    ),
-                    catalogue_runners={
-                        r["selectionId"]: r.get("runnerName", "")
-                        for r in m.get("runners", [])
+        for market_type in market_types:
+            cursor = window_from
+            while cursor < window_to:
+                chunk_to = min(cursor + timedelta(hours=self.CATALOGUE_WINDOW_HOURS), window_to)
+                catalogue = self._rpc(
+                    "listMarketCatalogue",
+                    {
+                        "filter": {
+                            "eventTypeIds": ["7"],
+                            "marketCountries": ["AU"],
+                            "marketTypeCodes": [market_type],
+                            "marketStartTime": {
+                                "from": cursor.isoformat(),
+                                "to": chunk_to.isoformat(),
+                            },
+                        },
+                        "marketProjection": [
+                            "EVENT", "MARKET_START_TIME", "RUNNER_DESCRIPTION",
+                        ],
+                        "sort": "FIRST_TO_START",
+                        "maxResults": self.CATALOGUE_MAX_RESULTS,
                     },
-                )
-            )
-        log.info("betfair: %d AU markets in catalogue", len(markets))
+                ) or []
+                if len(catalogue) >= self.CATALOGUE_MAX_RESULTS:
+                    log.warning(
+                        "betfair: %s catalogue window %s..%s hit maxResults=%d; "
+                        "some markets may be missing",
+                        market_type, cursor, chunk_to, self.CATALOGUE_MAX_RESULTS,
+                    )
+                for m in catalogue:
+                    if m["marketId"] in seen:
+                        continue
+                    seen.add(m["marketId"])
+                    event = m.get("event") or {}
+                    start_str = m.get("marketStartTime")
+                    name = m.get("marketName", "")
+                    mm = _RACE_NO.match(name)
+                    markets.append(
+                        BetfairMarket(
+                            market_id=m["marketId"],
+                            market_name=name,
+                            market_type=market_type,
+                            venue=event.get("venue") or event.get("name"),
+                            market_start=(
+                                datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+                                if isinstance(start_str, str)
+                                else None
+                            ),
+                            race_number=int(mm.group(1)) if mm else None,
+                            number_of_winners=None,   # filled from the market book
+                            catalogue_runners={
+                                r["selectionId"]: r.get("runnerName", "")
+                                for r in m.get("runners", [])
+                            },
+                        )
+                    )
+                cursor = chunk_to
+        log.info(
+            "betfair: %d AU markets in catalogue (%s)",
+            len(markets),
+            ", ".join(f"{t}={sum(1 for x in markets if x.market_type == t)}" for t in market_types),
+        )
         return markets
 
     def fetch_market_books(self, markets: list[BetfairMarket]) -> None:

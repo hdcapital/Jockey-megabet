@@ -24,9 +24,9 @@ DASH = "—"
 
 #: Short column labels so a three-model table still fits an 80-column window.
 MODEL_LABEL = {
-    "betfair": "betfair",
+    "betfair": "bf",
     "sportsbet_beta": "sb-beta",
-    "sportsbet_power": "sb-power",
+    "sportsbet_power": "sb-pwr",
 }
 
 TIER_STYLE = {
@@ -44,10 +44,6 @@ def _pct(v: float | None) -> str:
     return f"{v:.1%}" if v is not None else DASH
 
 
-def _signed(v: float | None) -> str:
-    return f"{v:+.1%}" if v is not None else DASH
-
-
 def _countdown(seconds: float | None) -> str:
     if seconds is None:
         return DASH
@@ -55,6 +51,14 @@ def _countdown(seconds: float | None) -> str:
         return "jumped"
     m, s = divmod(int(seconds), 60)
     return f"{m}m{s:02d}s" if m else f"{s}s"
+
+
+def _local_hhmm(dt: datetime | None) -> str:
+    if dt is None:
+        return DASH
+    from zoneinfo import ZoneInfo
+
+    return dt.astimezone(ZoneInfo("Australia/Sydney")).strftime("%H:%M")
 
 
 def unproven_banner(settled_bets: int, threshold: int) -> Panel | None:
@@ -100,6 +104,7 @@ def render_race(
 
     title = (
         f"{head.venue or '?'} R{head.race_number or '?'}"
+        f"  ·  {_local_hhmm(head.start_time)}"
         f"  ·  jump in {_countdown(head.seconds_to_jump)}"
         f"  ·  {head.active_runner_count} runners, {head.places} places"
     )
@@ -110,24 +115,28 @@ def render_race(
 
     table = Table(title=title, title_justify="left", header_style="bold",
                   show_lines=False, pad_edge=False)
-    table.add_column("#", justify="right", width=3)
+    # Sized to fit a 120-column window with one model; a second model adds
+    # ten columns. Rich shrinks everything proportionally when a table
+    # overflows, which turns "51.00" into "51…" — so every column is fixed
+    # and no_wrap, and Note is the only one allowed to lose characters.
+    table.add_column("#", justify="right", width=2, min_width=2, no_wrap=True)
     table.add_column("Runner", no_wrap=True, overflow="ellipsis",
-                     min_width=16, max_width=22)
-    table.add_column("Win", justify="right", width=6)
-    table.add_column("Place", justify="right", width=6)
-    table.add_column("P(place)", justify="right", width=8)
-    table.add_column("Fair", justify="right", width=6)
+                     min_width=14, max_width=18)
+    table.add_column("Win", justify="right", width=6, no_wrap=True)
+    table.add_column("Place", justify="right", width=6, no_wrap=True)
+    table.add_column("P(pl)", justify="right", width=6, no_wrap=True)
+    table.add_column("Fair", justify="right", width=6, no_wrap=True)
     for m in models:
-        table.add_column(f"drz·{MODEL_LABEL.get(m, m)}", justify="right", width=12)
-    table.add_column("EV", justify="right", width=7)
+        table.add_column(f"drz·{MODEL_LABEL.get(m, m)}", justify="right", width=10,
+                         no_wrap=True)
     # The exchange column only appears when there is an exchange opinion to
     # put in it; an empty column of em dashes is just width.
     show_bf = any(v.p_place_betfair is not None for v in valuations)
     if show_bf:
         table.add_column("BF place", justify="right", width=8)
-    table.add_column("Tier", width=8)
-    table.add_column("Stake", justify="right", width=7)
-    table.add_column("Note", no_wrap=True, overflow="ellipsis", max_width=38)
+    table.add_column("Tier", width=7, no_wrap=True)
+    table.add_column("Stake", justify="right", width=7, no_wrap=True)
+    table.add_column("Note", no_wrap=True, overflow="ellipsis", max_width=26)
 
     rows = sorted(
         valuations, key=lambda v: (v.drz if v.drz is not None else -1), reverse=True
@@ -151,7 +160,8 @@ def render_race(
                     f"exchange disagrees by {gap:+.1%} (exchange has been right)"
                 )
         if interesting and v.tier != TIER_BET and v.tier_reasons:
-            note_bits.append(v.tier_reasons[0])
+            # The token is what matters at a glance; the detail is in the log.
+            note_bits.append(v.tier_reasons[0].split(":", 1)[0])
         if v.band_shrink < 1.0:
             note_bits.append(f"band x{v.band_shrink:.3f}")
         if v.price_type != "fixed":
@@ -167,7 +177,6 @@ def render_race(
         for m in models:
             d = v.drz_by_model.get(m)
             cells.append(f"{d:.3f}" if d is not None else DASH)
-        cells += [_signed(v.ev)]
         if show_bf:
             cells.append(_pct(v.p_place_betfair))
         cells += [
@@ -215,7 +224,7 @@ def render_scan(
     n_suspect = sum(1 for r in by_race for v in r if v.tier == TIER_SUSPECT)
     console.print(
         f"[bold]{len(by_race)} races valued[/bold] at "
-        f"{retrieved_at:%H:%M:%S %Z} · "
+        f"{_local_hhmm(retrieved_at)} AEST/AEDT · "
         f"[green]{n_bet} BET[/green] · [yellow]{n_watch} WATCH[/yellow] · "
         f"[red]{n_suspect} SUSPECT[/red]"
     )
@@ -224,5 +233,13 @@ def render_scan(
             "[dim]No BET rows. Sportsbet's fixed place prices carry a large "
             "margin, so this is the expected result on most days.[/dim]"
         )
-    for line in skipped or []:
-        console.print(f"[dim]skipped: {line}[/dim]")
+    if skipped:
+        # Grouped: on a bad day this list is a page long, and a page of
+        # near-identical lines hides the one that matters.
+        groups: dict[str, list[str]] = {}
+        for line in skipped:
+            key = line.split(":", 1)[1].strip()[:48] if ":" in line else line[:48]
+            groups.setdefault(key, []).append(line.split(":", 1)[0])
+        for key, races in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+            sample = ", ".join(races[:3]) + (f" +{len(races) - 3} more" if len(races) > 3 else "")
+            console.print(f"[dim]skipped {len(races):3d} · {key}… — {sample}[/dim]")

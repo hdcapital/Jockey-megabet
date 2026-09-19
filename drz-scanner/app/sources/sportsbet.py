@@ -185,6 +185,9 @@ PLACE_PRICE_KEYS = (
 )
 
 
+_seen_price_keys: set[str] = set()
+
+
 def _price_from_entry(entry: dict[str, Any], keys: tuple[str, ...]) -> float | None:
     """First usable decimal price, in ``keys`` order.
 
@@ -197,6 +200,9 @@ def _price_from_entry(entry: dict[str, Any], keys: tuple[str, ...]) -> float | N
     for k in keys:
         if k not in entry:
             continue
+        if k not in _seen_price_keys:
+            _seen_price_keys.add(k)
+            log.info("sportsbet: price field in use: %r", k)
         v = _decimal(entry.get(k))
         if v is not None:
             return v
@@ -404,16 +410,28 @@ class SportsbetClient:
 # against archived responses without any network)
 # ---------------------------------------------------------------------------
 
-#: Only thoroughbreds. Sportsbet's AllRacing sections carry className values
-#: like "Horses - Aus/NZ"; harness and greyhound meetings are excluded so a
-#: shared venue name can never mix codes.
+#: Only thoroughbreds, and only Australian ones. Sportsbet's AllRacing
+#: sections carry className values like "Horses - Aus/NZ" alongside other
+#: "Horses - ..." classes for international meetings (Remington Park,
+#: Turffontein, Hanshin were all served under a "Horses" class on the first
+#: live run). The calibration is Australian-only, so the class must say so;
+#: harness and greyhound meetings are excluded so a shared venue name can
+#: never mix codes. New Zealand shares the "Aus/NZ" class and is removed
+#: one level down, from the racecard's own ``country`` field.
 HORSE_CLASS_PREFIX = "horse"
+DOMESTIC_CLASS_TOKEN = "aus"
+
+_seen_class_names: set[str] = set()
 
 
 def is_thoroughbred_class(class_name: Any) -> bool:
     return isinstance(class_name, str) and class_name.strip().lower().startswith(
         HORSE_CLASS_PREFIX
     )
+
+
+def is_domestic_class(class_name: Any) -> bool:
+    return is_thoroughbred_class(class_name) and DOMESTIC_CLASS_TOKEN in class_name.lower()
 
 
 def parse_all_racing(
@@ -430,7 +448,13 @@ def parse_all_racing(
         if not (isinstance(events, list) and isinstance(name, str) and events):
             continue
         class_name = _first(node, "className", "raceType", "classType")
-        if not is_thoroughbred_class(class_name):
+        if isinstance(class_name, str) and class_name not in _seen_class_names:
+            # Record the taxonomy once per process: this is how a new class
+            # ("Horses - Intl"?) gets noticed instead of silently valued.
+            _seen_class_names.add(class_name)
+            log.info("sportsbet: className seen: %r (%s)", class_name,
+                     "kept" if is_domestic_class(class_name) else "skipped")
+        if not is_domestic_class(class_name):
             continue
         meeting_id = str(_first(node, "id", "meetingId", default=name))
         if meeting_id in seen_meetings:
@@ -589,6 +613,7 @@ def parse_racecard(
         status=status,
         name=_first(top, "name", "eventName", "raceName"),
         venue=_first(top, "competitionName", "venueName", "meetingName"),
+        country=(str(_first(top, "country", "countryName", default="")).strip() or None),
         meeting_source_id=str(_first(top, "competitionId", "meetingId", default="") or "")
         or None,
         runners=runners,

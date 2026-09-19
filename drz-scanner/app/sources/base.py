@@ -100,6 +100,8 @@ class RaceInfo:
     name: str | None = None
     venue: str | None = None
     meeting_source_id: str | None = None
+    #: The racecard's own country field ("Australia"), when it carries one.
+    country: str | None = None
     runners: list[RunnerInfo] = field(default_factory=list)
     result_placings: list[int] = field(default_factory=list)  # saddlecloths, in order
     result_raw: str | None = None

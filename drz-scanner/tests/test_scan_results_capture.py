@@ -219,3 +219,31 @@ def test_a_quick_sweep_reuses_the_schedule_and_refetches_only_near_jump_races(
     )
     assert by_race3 == []
     assert sb.schedule_fetches == 1
+
+
+def test_new_zealand_racecards_are_skipped_not_valued(fixture, scan_env):
+    """'Aus/NZ' is one Sportsbet class; the racecard's country tells them apart."""
+    settings, calibration = scan_env
+    args = build_parser().parse_args(["--allow-uncalibrated", "--no-db"])
+
+    class NZSportsbet(FakeSportsbet):
+        def fetch_racecard(self, event_id):
+            race = super().fetch_racecard(event_id)
+            race.country = "New Zealand"
+            return race
+
+    by_race, skipped, _ = scan_once(args, settings, calibration, NZSportsbet(fixture))
+    assert by_race == []
+    assert any("New Zealand" in s for s in skipped)
+
+
+def test_races_beyond_the_horizon_wait_for_a_later_sweep(fixture, scan_env):
+    settings, calibration = scan_env
+    args = build_parser().parse_args(["--allow-uncalibrated", "--no-db"])
+    settings.racecard_horizon_minutes = 10       # the fixture race is 15 min out
+    sb = FakeSportsbet(fixture)
+    by_race, _skipped, _ = scan_once(args, settings, calibration, sb)
+    assert by_race == [] and sb.fetched == [], "no racecard fetched beyond the horizon"
+    settings.racecard_horizon_minutes = 30
+    by_race, _skipped, _ = scan_once(args, settings, calibration, sb)
+    assert len(by_race) == 1

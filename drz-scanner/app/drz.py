@@ -353,12 +353,20 @@ def scan_once(
     if bf is not None:
         bf.refresh()
     selected = select_stubs(stubs, args)
+    now = datetime.now(timezone.utc)
     if only_event_ids is not None:
         selected = [s for s in selected if s.event_id in only_event_ids]
+    else:
+        horizon = settings.racecard_horizon_minutes * 60
+        beyond = [s for s in selected
+                  if s.start_time is not None
+                  and (s.start_time - now).total_seconds() > horizon]
+        if beyond:
+            log.info("%d race(s) beyond the %d-minute horizon left for a later sweep",
+                     len(beyond), settings.racecard_horizon_minutes)
+        selected = [s for s in selected if s not in beyond]
     log.info("valuing %d open races%s", len(selected),
              " (near-jump refresh)" if only_event_ids is not None else "")
-
-    now = datetime.now(timezone.utc)
     by_race: list[list[PlaceValuation]] = []
     skipped: list[str] = []
     for stub in selected:
@@ -366,13 +374,19 @@ def scan_once(
             race = sb.fetch_racecard(stub.event_id)
         except (SourceUnavailableError, SchemaMismatchError) as exc:
             skipped.append(f"{stub.meeting_name} R{stub.race_number}: {exc}")
-            log.error("racecard %s failed: %s", stub.event_id, exc)
+            log.warning("racecard %s (%s R%s) skipped: %s",
+                        stub.event_id, stub.meeting_name, stub.race_number, exc)
             continue
         race.venue = race.venue or stub.meeting_name
         race.race_number = race.race_number or stub.race_number
         race.start_time = race.start_time or stub.start_time
         if race.status != "open":
             skipped.append(f"{race.venue} R{race.race_number}: {race.status}")
+            continue
+        if race.country and race.country not in settings.allowed_countries:
+            # "Aus/NZ" is one Sportsbet class; the racecard is where NZ
+            # (and anything else) gets told apart. The calibration is AU-only.
+            skipped.append(f"{race.venue} R{race.race_number}: country {race.country}, not valued")
             continue
 
         places = places_for_field(len(race.active_runners()))

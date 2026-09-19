@@ -2,7 +2,7 @@
 
 Built 2026-09-18. Python 3.11.15, Linux build environment.
 
-**Test suite: 365 passed, 3 skipped** (`python -m pytest`). The three skips
+**Test suite: 378 passed, 3 skipped** (`python -m pytest`). The three skips
 are the live Sportsbet tests, which cannot run here — see below.
 
 ---
@@ -75,6 +75,40 @@ into NaT, which the filters then drop. A naive `pd.to_datetime` raises, and
 a naive `errors="coerce"` would have silently dropped those meetings.
 
 ---
+
+## First live run (2026-09-19 09:48 AEST, user's Windows machine)
+
+The scanner reached Sportsbet from an Australian connection and ran the
+loop for several sweeps. What it settled:
+
+* **The place price is live-verified.** Every valued race showed real
+  Sportsbet place prices (1.95, 2.40, 2.80 ...) under price code `L`, and
+  the scanner now logs which field name it found at startup
+  (`sportsbet: price field in use: ...`). Open item 1 below is closed.
+* Schedule, racecards, scratchings, the near-jump cadence and the
+  result-capture pass all behaved. 0 BET / 41 WATCH, as expected.
+* Betfair login succeeded with the user's credentials.
+
+Three things it found, all fixed in model 1.2 and covered by tests:
+
+* **Betfair `listMarketCatalogue` returned `TOO_MUCH_DATA`.** One request
+  for a whole day's WIN+PLACE markets with two heavyweight projections
+  exceeds Betfair's data-weight limit of 200. The catalogue is now fetched
+  per market type, with the runner projection only, in six-hour windows.
+  Until this fix the exchange never engaged, so every row said
+  `no_exchange_confirmation` — the second-opinion path is not yet
+  live-verified, only the login is.
+* **International meetings were valued.** Remington Park, Turffontein,
+  Hanshin, Ellerslie and Trentham were served under a "Horses" class and
+  scored with the Australian calibration. `className` must now contain
+  "Aus"; New Zealand (which shares "Aus/NZ") is dropped from the racecard's
+  `country` field; every distinct class name is logged the first time it
+  is seen. The "no Win-or-Place market" and "0 active runners" errors in
+  the run were all international races with tote-only pricing, and go
+  away with them.
+* **A full sweep of 289 races took ~5 minutes**, longer than its 3-minute
+  interval. AU-only cuts that to ~100 races, and races more than three
+  hours from the jump are left for a later sweep.
 
 ## Pre-launch review (model 1.2)
 
@@ -191,7 +225,11 @@ $ echo $?
 
 ### Consequently unverified
 
-**1. The place-price field name — the most important open item.**
+**1. ~~The place-price field name~~ — CLOSED by the first live run
+(2026-09-19): real place prices parsed from every valued race.**
+
+<details><summary>What this item said before it was closed</summary>
+
 
 The parser reads the place price from the `priceCode=L` entry, trying
 `placePrice`, `placePriceDecimal`, `returnPlace`, `placeOdds`, `place`,
@@ -212,6 +250,8 @@ derived number.
 
 *To close this:* run `python -m pytest -m live` from an Australian machine.
 `test_an_open_racecard_carries_a_live_place_price` answers it directly.
+
+</details>
 
 **2. What `MDP` and `TMD` actually are.**
 

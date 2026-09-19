@@ -49,6 +49,14 @@ class Settings(BaseSettings):
 
     # --- Sportsbet ----------------------------------------------------------
     sportsbet_base_url: str = "https://www.sportsbet.com.au"
+    # Only these countries are valued. The calibration is Australian-only
+    # (New Zealand was excluded from the fit), so a racecard whose own
+    # country field says otherwise is skipped, not scored.
+    allowed_countries: tuple[str, ...] = ("Australia",)
+    # On a full sweep, racecards further out than this are not fetched. A
+    # race ten hours away does not need re-pricing every three minutes, and
+    # a day of ~100 races would otherwise blow the sweep past its interval.
+    racecard_horizon_minutes: int = 180
 
     # --- Betfair ------------------------------------------------------------
     betfair_app_key: str | None = None

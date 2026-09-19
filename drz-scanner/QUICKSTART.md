@@ -113,6 +113,16 @@ Without credentials the scanner runs on Sportsbet alone, says so at startup,
 and — because a BET needs the exchange's place market to agree — **cannot
 show a BET row at all**. Everything tops out at WATCH until you add them.
 
+## What the first sweep looks like
+
+The first full sweep of the day fetches every Australian race inside three
+hours of its jump (~30-60 racecards, about a minute at the polite request
+rate) and prints one block per race. Then it settles into the cadence: a
+full sweep every three minutes, and only the races inside ten minutes of
+the jump every ~40 seconds. International and New Zealand meetings are
+listed by Sportsbet but not valued — the calibration is Australian-only,
+and the log records each class of meeting the first time it appears.
+
 ## The morning after a loop
 
 `data\logs\drz.log` has every sweep, every skipped race and every failure,

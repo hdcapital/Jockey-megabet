@@ -182,3 +182,38 @@ def test_an_open_racecard_still_scratches_on_a_missing_live_price(fixture):
     assert race.status == "open"
     scratched = next(r for r in race.runners if r.horse_name == "Scratchy Example")
     assert scratched.status == "scratched"
+
+
+@pytest.mark.parametrize("class_name,kept", [
+    ("Horses - Aus/NZ", True),
+    ("Horses - Australia", True),
+    ("horses - aus", True),
+    ("Horses - Intl", False),
+    ("Horses - UK/IRE", False),
+    ("Horses", False),            # a bare class does not say where
+    ("Greyhounds", False),
+    ("Harness - Aus/NZ", False),
+    (None, False),
+])
+def test_only_domestic_thoroughbred_classes_are_kept(class_name, kept):
+    """The first live run valued Remington Park, Turffontein and Hanshin under
+    a 'Horses' class. The calibration is Australian-only."""
+    from app.sources.sportsbet import is_domestic_class
+
+    assert is_domestic_class(class_name) is kept
+
+
+def test_schedule_drops_international_classes(fixture):
+    payload = fixture("all_racing_schedule.json")
+    payload["dates"][0]["sections"].append({
+        "raceType": "Horses", "meetings": [{
+            "id": 9999, "name": "Turffontein", "className": "Horses - Intl",
+            "events": [{"id": 9999001, "raceNumber": 1, "statusCode": "A"}]}]})
+    meetings, stubs = parse_all_racing(payload, date(2026, 9, 18))
+    assert [m.venue for m in meetings] == ["Fixtureville"]
+    assert all(s.meeting_name == "Fixtureville" for s in stubs)
+
+
+def test_racecard_carries_its_country(fixture):
+    race = parse_racecard(fixture("racecard_open_9_runners.json"), event_id="x")
+    assert race.country == "Australia"
