@@ -51,3 +51,31 @@ def test_crossed_book_rejected():
 def test_invalid_prices_at_or_below_one_ignored():
     p, _, _ = derive_probability(1.0, None, None, MIN_LIQ, MAX_SPREAD)
     assert p is None
+
+
+def test_catalogue_is_fetched_in_light_windows(monkeypatch):
+    """One request for a day with MARKET_DESCRIPTION + RUNNER_DESCRIPTION is
+    ~222 weight against Betfair's limit of 200 (TOO_MUCH_DATA, seen live
+    2026-09-19). The catalogue must be asked for in windows, runner
+    projection only, and deduplicated across windows."""
+    from datetime import date
+
+    from app.sources.betfair import BetfairClient
+
+    client = BetfairClient.__new__(BetfairClient)
+    calls = []
+
+    def fake_rpc(method, params, **_):
+        calls.append(params)
+        frm = params["filter"]["marketStartTime"]["from"]
+        # The same market straddles two windows; it must appear once.
+        return [{"marketId": "1.1", "marketName": "R1 1200m", "marketStartTime": frm,
+                 "event": {"venue": "Flemington"}, "runners": [{"selectionId": 1, "runnerName": "1. A"}]}]
+
+    client._rpc = fake_rpc
+    markets = client.list_au_win_markets(date(2026, 9, 19))
+    assert len(calls) >= 8, "a 52-hour span in 6-hour windows"
+    assert all("MARKET_DESCRIPTION" not in c["marketProjection"] for c in calls)
+    assert all(c["maxResults"] <= 200 for c in calls)
+    assert [m.market_id for m in markets] == ["1.1"], "deduplicated across windows"
+    assert markets[0].race_number == 1 and markets[0].venue == "Flemington"

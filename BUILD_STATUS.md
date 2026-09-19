@@ -1,5 +1,17 @@
 # BUILD STATUS
 
+## 2026-09-19 — Betfair catalogue fix (ported from drz-scanner)
+
+A live run with real credentials on 2026-09-19 showed `listMarketCatalogue`
+returning `TOO_MUCH_DATA`: one request for a day's ~110 AU WIN markets
+with both `MARKET_DESCRIPTION` and `RUNNER_DESCRIPTION` weighs ~222
+against Betfair's limit of 200, so the exchange never engaged. The
+catalogue is now fetched in six-hour windows with the runner projection
+only (`MARKET_DESCRIPTION` was never read), deduplicated by market id.
+Also ported: one automatic re-login when a session token expires mid-loop.
+Regression test: `test_catalogue_is_fetched_in_light_windows`. 150 tests pass.
+
+
 Last updated: 2026-08-22 (UTC) — after live GitHub Actions runs
 32543539735 / 32543634489 and the first successful live probe from an
 Australian machine.
