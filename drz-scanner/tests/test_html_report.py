@@ -57,3 +57,13 @@ def test_report_writes_atomically(tmp_path, fixture, settings, calibration):
 def test_empty_sweep_still_renders(calibration):
     page = render_html([], calibration, settled_bets=0, proven_threshold=300, retrieved_at=NOW)
     assert "No open Australian race" in page
+
+
+def test_day_card_is_a_snapshot_with_a_caveat(fixture, settings, calibration):
+    page = render_html(_races(fixture, settings, calibration), calibration, settled_bets=0,
+                       proven_threshold=300, retrieved_at=NOW, refresh_seconds=0,
+                       heading="drz-scanner — the whole Australian day card",
+                       caveat="Morning card: prices as of 12:00.")
+    assert 'http-equiv="refresh"' not in page
+    assert "snapshot" in page and "Morning card" in page
+    assert "whole Australian day card" in page

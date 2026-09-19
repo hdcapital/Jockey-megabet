@@ -203,12 +203,14 @@ def render_scan(
     retrieved_at: datetime,
     show_all: bool = False,
     skipped: list[str] | None = None,
+    banner: bool = True,
 ) -> None:
-    banner = unproven_banner(settled_bets, proven_threshold)
     if banner:
-        console.print(banner)
-    console.print(calibration_banner(calibration))
-    console.print()
+        unproven = unproven_banner(settled_bets, proven_threshold)
+        if unproven:
+            console.print(unproven)
+        console.print(calibration_banner(calibration))
+        console.print()
 
     if not by_race:
         console.print(

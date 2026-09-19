@@ -22,6 +22,36 @@ The other three files:
 | `calibrate.bat` | Refit `lam`/`tau` (and the Sportsbet beta) from real results |
 | `backtest.bat` | Settle stored signals; report ROI, calibration and closing-line value |
 
+## Running it once in the morning: `daycard.bat`
+
+Double-click **`daycard.bat`** and it scores the entire Australian day
+card in one pass — every race, every runner, no time horizon — writes it
+to `data\daycard.html`, opens it in your browser, and exits. Takes about
+two minutes for a normal day.
+
+**Read the yellow note at the top of that page before acting on it.** A
+fixed-odds place bet locks the price you take, so a genuine edge at a
+morning price is real — but three things are different in the morning:
+
+1. **Prices move.** Morning place prices are often nowhere near the jump
+   price. The score is a statement about *this* price at *this* moment.
+2. **Fields change.** A scratching later in the day turns an 8-runner race
+   into a 7-runner race that pays two places, not three. Those races are
+   flagged **terms fragile**. Sportsbet still pays three on a bet already
+   struck, but with deductions.
+3. **Betfair is thin in the morning.** The BET tier needs the exchange to
+   agree, and most morning place markets have too little in them to
+   count. Expect most rows to say `no exchange confirmation` and top out
+   at WATCH. That is the safety catch, not a fault — the evidence behind it
+   (model-only signals returning 80–88c in the dollar) does not go away
+   because it is morning.
+
+So the honest description of the day card is: a ranked list of where the
+morning place prices look most generous, with the checks that *can* be done
+at that hour done. If you want the checks that need the live market —
+exchange agreement, fresh prices, the final field — that is what `drz.bat`
+is for.
+
 ## The live report — the easy way to read it
 
 After the first sweep, `drz.bat` opens **`data\latest.html`** in your

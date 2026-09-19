@@ -363,77 +363,96 @@ class BetfairClient:
         return markets
 
     def fetch_market_books(self, markets: list[BetfairMarket]) -> None:
-        """Populate runner quotes from ``listMarketBook``."""
+        """Populate runner quotes from ``listMarketBook``.
+
+        Whether the key is delayed is decided once per sweep, over every
+        book together: a delayed key returns no matched volume anywhere,
+        while a live key at 10am simply has some thin markets. Judging each
+        market alone would hand every thin market the delayed key's looser
+        gate — exactly the markets that should fail the liquidity gate.
+        """
         s = self.settings
         fetched_at = datetime.now(timezone.utc)
+        books: list[tuple[BetfairMarket, dict[str, Any]]] = []
         for i in range(0, len(markets), 25):  # API weight limits
             chunk = markets[i : i + 25]
-            books = self._rpc(
+            result = self._rpc(
                 "listMarketBook",
                 {
                     "marketIds": [m.market_id for m in chunk],
                     "priceProjection": {"priceData": ["EX_BEST_OFFERS"]},
                 },
             ) or []
-            by_id = {b["marketId"]: b for b in books}
+            by_id = {b["marketId"]: b for b in result}
             for market in chunk:
                 book = by_id.get(market.market_id)
-                if not book:
+                if book:
+                    books.append((market, book))
+
+        setting = (s.betfair_key_delayed or "auto").strip().lower()
+        if setting in ("true", "yes", "1"):
+            delayed = True
+        elif setting in ("false", "no", "0"):
+            delayed = False
+        else:
+            delayed = bool(books) and all(market_is_delayed(b) for _, b in books)
+        if delayed and not self.delayed_key_detected:
+            log.warning(
+                "betfair: no matched volume on any of %d market books — treating "
+                "the application key as DELAYED (BETFAIR_KEY_DELAYED=%s); liquidity "
+                "gate replaced by a %.0f%% spread-only gate, rows tagged "
+                "betfair_delayed, win-price cap %.0f",
+                len(books), setting, s.betfair_delayed_max_relative_spread * 100,
+                s.max_win_price_betfair_delayed,
+            )
+        self.delayed_key_detected = delayed
+
+        for market, book in books:
+            market.total_matched = book.get("totalMatched")
+            status = book.get("status", "UNKNOWN")
+            if isinstance(book.get("numberOfWinners"), (int, float)):
+                market.number_of_winners = int(book["numberOfWinners"])
+            for r in book.get("runners", []):
+                if r.get("status") not in (None, "ACTIVE"):
                     continue
-                delayed = market_is_delayed(book)
-                if delayed and not self.delayed_key_detected:
-                    self.delayed_key_detected = True
-                    log.warning(
-                        "betfair: no matched volume on market %s — treating this "
-                        "as a DELAYED application key; liquidity gate replaced by "
-                        "a %.0f%% spread-only gate and rows tagged betfair_delayed",
-                        market.market_id, s.betfair_delayed_max_relative_spread * 100,
-                    )
-                market.total_matched = book.get("totalMatched")
-                status = book.get("status", "UNKNOWN")
-                if isinstance(book.get("numberOfWinners"), (int, float)):
-                    market.number_of_winners = int(book["numberOfWinners"])
-                for r in book.get("runners", []):
-                    if r.get("status") not in (None, "ACTIVE"):
-                        continue
-                    ex = r.get("ex") or {}
-                    backs = ex.get("availableToBack") or []
-                    lays = ex.get("availableToLay") or []
-                    best_back = backs[0]["price"] if backs else None
-                    back_vol = backs[0]["size"] if backs else None
-                    best_lay = lays[0]["price"] if lays else None
-                    lay_vol = lays[0]["size"] if lays else None
-                    total = r.get("totalMatched") or book.get("totalMatched")
-                    prob, reliable, detail = derive_probability(
-                        best_back,
-                        best_lay,
-                        total,
-                        s.betfair_min_liquidity,
-                        s.betfair_max_relative_spread,
+                ex = r.get("ex") or {}
+                backs = ex.get("availableToBack") or []
+                lays = ex.get("availableToLay") or []
+                best_back = backs[0]["price"] if backs else None
+                back_vol = backs[0]["size"] if backs else None
+                best_lay = lays[0]["price"] if lays else None
+                lay_vol = lays[0]["size"] if lays else None
+                total = r.get("totalMatched") or book.get("totalMatched")
+                prob, reliable, detail = derive_probability(
+                    best_back,
+                    best_lay,
+                    total,
+                    s.betfair_min_liquidity,
+                    s.betfair_max_relative_spread,
+                    delayed=delayed,
+                    delayed_max_relative_spread=s.betfair_delayed_max_relative_spread,
+                )
+                raw_name = market.catalogue_runners.get(r["selectionId"], "")
+                cloth, _ = split_runner_name(raw_name)
+                market.runners.append(
+                    BetfairRunnerQuote(
+                        market_id=market.market_id,
+                        selection_id=r["selectionId"],
+                        runner_name=raw_name,
+                        cloth_number=cloth,
+                        best_back=best_back,
+                        best_lay=best_lay,
+                        back_volume=back_vol,
+                        lay_volume=lay_vol,
+                        total_matched=total,
+                        market_status=status,
+                        fetched_at=fetched_at,
+                        probability=prob,
+                        reliable=reliable,
                         delayed=delayed,
-                        delayed_max_relative_spread=s.betfair_delayed_max_relative_spread,
+                        detail=detail,
                     )
-                    raw_name = market.catalogue_runners.get(r["selectionId"], "")
-                    cloth, _ = split_runner_name(raw_name)
-                    market.runners.append(
-                        BetfairRunnerQuote(
-                            market_id=market.market_id,
-                            selection_id=r["selectionId"],
-                            runner_name=raw_name,
-                            cloth_number=cloth,
-                            best_back=best_back,
-                            best_lay=best_lay,
-                            back_volume=back_vol,
-                            lay_volume=lay_vol,
-                            total_matched=total,
-                            market_status=status,
-                            fetched_at=fetched_at,
-                            probability=prob,
-                            reliable=reliable,
-                            delayed=delayed,
-                            detail=detail,
-                        )
-                    )
+                )
 
 
 def place_market_for(

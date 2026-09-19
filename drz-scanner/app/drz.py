@@ -97,6 +97,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "after the first sweep")
     p.add_argument("--no-report", action="store_true",
                    help="do not write data/latest.html")
+    p.add_argument("--day", action="store_true",
+                   help="the whole Australian day card in one pass: every race, "
+                        "every runner, no time horizon, written to data/daycard.html, "
+                        "then exit. A snapshot of morning prices — see QUICKSTART")
     return p
 
 
@@ -143,7 +147,16 @@ def _apply_overrides(settings, args) -> None:
         )
 
 
+#: Event ids found (from their racecard) to be outside the allowed countries
+#: today. The schedule stub cannot tell NZ from AU — both sit in "Aus/NZ" —
+#: so without this the near-jump loop would refetch an Ellerslie racecard
+#: every 40 seconds just to skip it again.
+EXCLUDED_EVENT_IDS: set[str] = set()
+
+
 def _matches_filters(stub: RaceStub, args) -> bool:
+    if stub.event_id in EXCLUDED_EVENT_IDS:
+        return False
     if args.meeting and args.meeting.lower() not in stub.meeting_name.lower():
         return False
     if args.race is not None and stub.race_number != args.race:
@@ -365,6 +378,8 @@ def scan_once(
     now = datetime.now(timezone.utc)
     if only_event_ids is not None:
         selected = [s for s in selected if s.event_id in only_event_ids]
+    elif getattr(args, "day", False):
+        pass  # the whole card, however far out
     else:
         horizon = settings.racecard_horizon_minutes * 60
         beyond = [s for s in selected
@@ -395,6 +410,7 @@ def scan_once(
         if race.country and race.country not in settings.allowed_countries:
             # "Aus/NZ" is one Sportsbet class; the racecard is where NZ
             # (and anything else) gets told apart. The calibration is AU-only.
+            EXCLUDED_EVENT_IDS.add(stub.event_id)
             skipped.append(f"{race.venue} R{race.race_number}: country {race.country}, not valued")
             continue
 
@@ -507,11 +523,26 @@ def _startup_notices(settings, bf: BetfairSession, log_path) -> None:
         console.print("[yellow]Exchange confirmation disabled by flag.[/yellow]")
 
 
+def _local_hhmm(dt: datetime) -> str:
+    return dt.astimezone(RACING_TZ).strftime("%H:%M")
+
+
+def _day_caveat(retrieved: datetime) -> str:
+    return (
+        f"Morning card: every price here was taken at {_local_hhmm(retrieved)}. A fixed-odds "
+        f"place bet locks the price you take, so a genuine edge at this price is real — but "
+        f"(1) morning place prices are often shorter or longer than jump prices, (2) a "
+        f"scratching after now changes the number of places paid in fields of exactly 8, "
+        f"and (3) Betfair's morning markets are thin, so most rows will lack exchange "
+        f"confirmation and top out at WATCH. This is a snapshot, not a live view."
+    )
+
+
 def _near_jump_ids(stubs: list[RaceStub], settings, now: datetime) -> set[str]:
     """Open races inside the near-jump window, by event id."""
     out = set()
     for s in stubs:
-        if not s.is_open or s.start_time is None:
+        if not s.is_open or s.start_time is None or s.event_id in EXCLUDED_EVENT_IDS:
             continue
         secs = (s.start_time - now).total_seconds()
         if -60 <= secs <= settings.near_jump_window_seconds:
@@ -521,6 +552,8 @@ def _near_jump_ids(stubs: list[RaceStub], settings, now: datetime) -> set[str]:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.day and args.loop:
+        args.loop = False   # a day card is one pass by definition
     settings = get_settings()
     level = logging.DEBUG if args.verbose else (logging.WARNING if args.quiet else logging.INFO)
     log_path = setup_logging(level, log_dir=settings.log_dir)
@@ -580,18 +613,29 @@ def main(argv: list[str] | None = None) -> int:
                     exit_code = 0
                     settled = _settled_bet_count(args.no_db)
                     retrieved = datetime.now(timezone.utc)
-                    render_scan(
-                        by_race, calibration, settled, settings.proven_signal_threshold,
-                        retrieved, show_all=args.show_all, skipped=skipped,
-                    )
+                    if do_quick and not by_race:
+                        # A quick sweep with nothing to show is one line, not
+                        # the banner and a table of nothing.
+                        console.print(f"[dim]{_local_hhmm(retrieved)} near-jump refresh: "
+                                      f"nothing to value[/dim]")
+                    else:
+                        render_scan(
+                            by_race, calibration, settled, settings.proven_signal_threshold,
+                            retrieved, show_all=args.show_all or args.day,
+                            skipped=skipped, banner=not do_quick,
+                        )
                     if not args.no_report:
                         try:
                             report = write_report(
-                                settings.report_path, by_race=by_race,
+                                settings.daycard_path if args.day else settings.report_path,
+                                by_race=by_race,
                                 calibration=calibration, settled_bets=settled,
                                 proven_threshold=settings.proven_signal_threshold,
                                 retrieved_at=retrieved, skipped=skipped,
-                                refresh_seconds=settings.report_refresh_seconds,
+                                refresh_seconds=0 if args.day else settings.report_refresh_seconds,
+                                heading=("drz-scanner — the whole Australian day card"
+                                         if args.day else "drz-scanner — today's Australian races"),
+                                caveat=_day_caveat(retrieved) if args.day else None,
                             )
                             console.print(f"[dim]report: {report}[/dim]")
                             if args.open and not opened:
@@ -602,6 +646,13 @@ def main(argv: list[str] | None = None) -> int:
                         except OSError as exc:  # a report must never stop a scan
                             log.warning("report not written: %s", exc)
                 if not args.loop:
+                    if args.day:
+                        console.print(
+                            f"\n[bold]Day card written.[/bold] Prices are as of "
+                            f"{_local_hhmm(datetime.now(timezone.utc))}; a fixed-odds bet locks "
+                            f"the price you take, but the field (and so the place terms) can "
+                            f"still change before the jump."
+                        )
                     return exit_code
 
                 # Cadence: while any race is inside the near-jump window,

@@ -247,3 +247,37 @@ def test_races_beyond_the_horizon_wait_for_a_later_sweep(fixture, scan_env):
     settings.racecard_horizon_minutes = 30
     by_race, _skipped, _ = scan_once(args, settings, calibration, sb)
     assert len(by_race) == 1
+
+
+def test_a_non_au_race_is_excluded_for_the_rest_of_the_day(fixture, scan_env):
+    """Without this the near-jump loop refetches an NZ racecard every 40s."""
+    settings, calibration = scan_env
+    args = build_parser().parse_args(["--allow-uncalibrated", "--no-db"])
+
+    class NZSportsbet(FakeSportsbet):
+        def fetch_racecard(self, event_id):
+            race = super().fetch_racecard(event_id)
+            race.country = "New Zealand"
+            return race
+
+    sb = NZSportsbet(fixture)
+    _by, _sk, stubs = scan_once(args, settings, calibration, sb)
+    assert sb.fetched == ["900101"]
+    from app.drz import EXCLUDED_EVENT_IDS, _near_jump_ids
+
+    assert "900101" in EXCLUDED_EVENT_IDS
+    settings.near_jump_window_seconds = 20 * 60
+    assert _near_jump_ids(stubs, settings, datetime.now(timezone.utc)) == set(), (
+        "an excluded race must not come back through the near-jump window")
+    scan_once(args, settings, calibration, sb, stubs=stubs, only_event_ids={"900101"})
+    scan_once(args, settings, calibration, sb)
+    assert sb.fetched == ["900101"], "never fetched again today"
+
+
+def test_day_mode_ignores_the_horizon_and_values_the_whole_card(fixture, scan_env):
+    settings, calibration = scan_env
+    settings.racecard_horizon_minutes = 1       # the fixture race is 15 min out
+    args = build_parser().parse_args(["--allow-uncalibrated", "--no-db", "--day"])
+    sb = FakeSportsbet(fixture)
+    by_race, _sk, _ = scan_once(args, settings, calibration, sb)
+    assert len(by_race) == 1, "--day fetches everything however far out"

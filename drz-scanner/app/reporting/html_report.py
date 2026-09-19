@@ -115,8 +115,16 @@ def render_html(
     retrieved_at: datetime,
     skipped: list[str] | None = None,
     refresh_seconds: int = 45,
+    heading: str = "drz-scanner — today's Australian races",
+    caveat: str | None = None,
 ) -> str:
-    """The full page as a string."""
+    """The full page as a string.
+
+    ``refresh_seconds`` of 0 disables the auto-reload (a one-off day card
+    is a snapshot, not a live view). ``caveat`` is a short paragraph shown
+    under the heading — the day card uses it to say when its prices were
+    taken and what can change after that.
+    """
     e = html.escape
     races = sorted(
         by_race,
@@ -128,17 +136,23 @@ def render_html(
 
     out: list[str] = []
     out.append(f'<!doctype html><html lang="en"><head><meta charset="utf-8">')
-    out.append(f'<meta http-equiv="refresh" content="{int(refresh_seconds)}">')
+    if refresh_seconds > 0:
+        out.append(f'<meta http-equiv="refresh" content="{int(refresh_seconds)}">')
     out.append('<meta name="viewport" content="width=device-width,initial-scale=1">')
     out.append(f"<title>drz {_local(retrieved_at)} · {n_bet} BET · {n_watch} WATCH</title>")
     out.append(f"<style>{_STYLE}</style></head><body>")
-    out.append("<h1>drz-scanner — today's Australian races</h1>")
+    out.append(f"<h1>{e(heading)}</h1>")
     out.append(
         f'<div class="top"><span>as of <b>{_local(retrieved_at, "%H:%M:%S")}</b> AEST/AEDT</span>'
         f'<span>model <b>{e(MODEL_VERSION)}</b></span>'
         f'<span>lam <b>{calibration.lam:.3f}</b> tau <b>{calibration.tau:.3f}</b> ({e(calibration.version)})</span>'
-        f'<span>page reloads every {int(refresh_seconds)}s</span></div>'
+        + (f'<span>page reloads every {int(refresh_seconds)}s</span>' if refresh_seconds > 0
+           else '<span>snapshot — does not reload</span>')
+        + '</div>'
     )
+    if caveat:
+        out.append(f'<div class="banner" style="background:var(--watch-bg);color:var(--watch);'
+                   f'border-color:var(--watch)">{e(caveat)}</div>')
     if settled_bets < proven_threshold:
         out.append(
             f'<div class="banner"><b>BET signals are UNPROVEN.</b> {settled_bets} settled BET '

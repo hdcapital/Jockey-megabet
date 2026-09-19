@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     # Rewritten after every sweep: every race, every runner, in a browser.
     report_path: Path = DATA_DIR / "latest.html"
     report_refresh_seconds: int = 45
+    daycard_path: Path = DATA_DIR / "daycard.html"
 
     # --- Sportsbet ----------------------------------------------------------
     sportsbet_base_url: str = "https://www.sportsbet.com.au"
@@ -70,6 +71,11 @@ class Settings(BaseSettings):
     betfair_identity_url: str = "https://identitysso.betfair.com"
     betfair_identity_cert_url: str = "https://identitysso-cert.betfair.com"
     betfair_api_url: str = "https://api.betfair.com/exchange/betting/json-rpc/v1"
+    # "auto": the key is treated as delayed only when EVERY market book in a
+    # sweep shows zero matched volume (one empty market is just a thin
+    # market, and thin markets must fail the liquidity gate, not be handed
+    # the delayed key's looser spread-only gate). "true"/"false" overrides.
+    betfair_key_delayed: str = "auto"
     betfair_min_liquidity: float = 500.0
     betfair_max_relative_spread: float = 0.25
     # A DELAYED application key returns no matched volume. When that is

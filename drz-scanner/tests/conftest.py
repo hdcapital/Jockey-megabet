@@ -37,3 +37,13 @@ def calibration():
     from app.calibration import load_calibration
 
     return load_calibration(Path(__file__).parent.parent / "data" / "calibration.json")
+
+
+@pytest.fixture(autouse=True)
+def _reset_excluded_event_ids():
+    """The scanner remembers non-AU event ids for the day; tests must not."""
+    from app import drz
+
+    drz.EXCLUDED_EVENT_IDS.clear()
+    yield
+    drz.EXCLUDED_EVENT_IDS.clear()

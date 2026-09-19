@@ -203,3 +203,63 @@ def test_a_non_session_error_is_not_retried():
     client.client = type("C", (), {"post_json": staticmethod(lambda *a, **k: Result())})()
     with pytest.raises(SourceUnavailableError):
         client._rpc("listMarketBook", {})
+
+
+# -- delayed-key detection is a session-level decision ----------------------
+
+def _client_with_books(monkeypatch, books, setting="auto"):
+    from app.config import Settings
+    from app.sources.betfair import BetfairClient
+
+    client = BetfairClient.__new__(BetfairClient)
+    client.settings = Settings(betfair_key_delayed=setting)
+    client.delayed_key_detected = False
+    monkeypatch.setattr(client, "_rpc", lambda *a, **k: books)
+    return client
+
+
+def _book(market_id, matched, runner_matched):
+    return {"marketId": market_id, "status": "OPEN", "totalMatched": matched,
+            "runners": [{"selectionId": 1, "status": "ACTIVE", "totalMatched": runner_matched,
+                         "ex": {"availableToBack": [{"price": 3.0, "size": 50}],
+                                "availableToLay": [{"price": 3.1, "size": 50}]}}]}
+
+
+def _markets(n):
+    return [BetfairMarket(f"1.{i}", "R1", "WIN", "V", None, race_number=1,
+                          catalogue_runners={1: "1. Horse"}) for i in range(n)]
+
+
+def test_one_thin_market_does_not_make_the_key_delayed(monkeypatch):
+    """At 10am a live key has thin markets. Those must fail the liquidity
+    gate, not be handed the delayed key's spread-only gate."""
+    books = [_book("1.0", 0, 0), _book("1.1", 4000.0, 3000.0)]
+    client = _client_with_books(monkeypatch, books)
+    markets = _markets(2)
+    client.fetch_market_books(markets)
+    assert client.delayed_key_detected is False
+    thin, liquid = markets[0].runners[0], markets[1].runners[0]
+    assert not thin.delayed and not thin.reliable, "thin market: priced but unreliable"
+    assert liquid.reliable
+
+
+def test_zero_volume_everywhere_means_a_delayed_key(monkeypatch):
+    books = [_book("1.0", 0, 0), _book("1.1", 0, 0)]
+    client = _client_with_books(monkeypatch, books)
+    markets = _markets(2)
+    client.fetch_market_books(markets)
+    assert client.delayed_key_detected is True
+    assert all(q.delayed and q.reliable for m in markets for q in m.runners), (
+        "under a delayed key a tight spread is the whole reliability test")
+
+
+def test_the_setting_overrides_the_heuristic(monkeypatch):
+    books = [_book("1.0", 4000.0, 3000.0)]
+    client = _client_with_books(monkeypatch, books, setting="true")
+    markets = _markets(1)
+    client.fetch_market_books(markets)
+    assert client.delayed_key_detected is True
+    client = _client_with_books(monkeypatch, [_book("1.0", 0, 0)], setting="false")
+    markets = _markets(1)
+    client.fetch_market_books(markets)
+    assert client.delayed_key_detected is False
