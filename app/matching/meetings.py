@@ -40,8 +40,21 @@ def find_betfair_market(
             if m.market_start is not None
             and abs(m.market_start - race.start_time) <= START_TIME_TOLERANCE
         ]
-        if timed:
-            candidates = timed
+        if not timed and candidates:
+            # Same venue and race number but hours apart: another day's
+            # meeting (the catalogue spans more than one) or a harness card
+            # at a shared venue. Never take it; say what was rejected.
+            log.warning(
+                "Betfair market for %s R%s rejected on start time: %s",
+                venue,
+                race.race_number,
+                "; ".join(
+                    f"{m.market_id} {m.market_name} starts {m.market_start}"
+                    for m in candidates[:3]
+                ),
+            )
+            return None
+        candidates = timed
     if len(candidates) == 1:
         return candidates[0]
     if len(candidates) > 1:

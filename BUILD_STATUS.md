@@ -11,6 +11,45 @@ only (`MARKET_DESCRIPTION` was never read), deduplicated by market id.
 Also ported: one automatic re-login when a session token expires mid-loop.
 Regression test: `test_catalogue_is_fetched_in_light_windows`. 150 tests pass.
 
+## 2026-09-19 — Betfair runner matching and delayed keys (second live run)
+
+With the catalogue loading (127 AU win markets) the next live run still
+showed the exchange contributing nothing: whole fields logged
+`runner unmatched on Betfair`, every matched runner was excluded as
+`thin market` or `spread too wide`, and the Betfair column was `—`
+throughout. Changes, each with a regression test in
+`tests/test_betfair_matching.py`:
+
+* **Runner matching** (`app/matching/runners.py`): Betfair names runners
+  `"4. Horse Name"`; the saddlecloth is now the first key (name checked,
+  never overridden), then normalized name. One INFO/WARNING line per race
+  reports `matched m/n`, the unmatched names and the first few names Betfair
+  lists for that market, so a wrong market is visible; per-runner lines are
+  DEBUG. The engine matches each race once instead of once per ride.
+* **Market lookup** (`app/matching/meetings.py`): a same-venue, same-race-
+  number market whose start is outside the 40-minute tolerance is now
+  rejected with a log line naming it, instead of being accepted when it was
+  the only candidate (the catalogue spans 52 hours, so the next day's card
+  at the same venue, or a harness card sharing a venue name, could be taken).
+* **Delayed application keys** (`app/sources/betfair.py`, `app/config.py`):
+  a delayed key reports zero matched volume on every book, so the
+  `BETFAIR_MIN_LIQUIDITY` gate could never pass and Betfair was never used.
+  The client now decides per session (all open books at zero matched
+  volume) and, when delayed, marks a runner reliable on the spread alone
+  (`BETFAIR_DELAYED_MAX_RELATIVE_SPREAD`, default 10%). `BETFAIR_KEY_DELAYED`
+  forces it either way. Quality text says `delayed key` when that rule was
+  used.
+* **Diagnostics**: markets that come back without a book, or with no active
+  runners, are logged with their status and counts.
+
+Not established from the log alone: whether the fully-unmatched races were
+a market taken from the wrong day, or a market with an empty book. The new
+per-race summary names the market's runners so the next run shows which.
+Genuinely wide morning spreads (50%–3000% at 10:37) are real and remain
+excluded; that improves as the markets fill through the day.
+
+163 tests pass.
+
 
 Last updated: 2026-08-22 (UTC) — after live GitHub Actions runs
 32543539735 / 32543634489 and the first successful live probe from an

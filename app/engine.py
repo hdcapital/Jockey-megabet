@@ -109,6 +109,21 @@ def build_ride_probabilities(
         "betfair": settings.consensus_weight_betfair,
         "sportsbet": settings.consensus_weight_sportsbet,
     }
+    # One Betfair market lookup and one runner match per race, not per ride.
+    matches_by_race: dict[str, list] = {}
+
+    def race_matches(race):
+        if race.source_id not in matches_by_race:
+            found = []
+            bf_market = find_betfair_market(venue, race, betfair_markets or [])
+            if bf_market is not None:
+                found = match_race_runners(
+                    race.active_runners(), bf_market.runners,
+                    race_label=f"{venue} R{race.race_number}",
+                )
+            matches_by_race[race.source_id] = found
+        return matches_by_race[race.source_id]
+
     for ride in card.rides:
         race, runner = ride.race, ride.runner
         dv = price_race_sportsbet(race, settings.devig_method)
@@ -130,20 +145,17 @@ def build_ride_probabilities(
         )
 
         if betfair_markets:
-            bf_market = find_betfair_market(venue, race, betfair_markets)
-            if bf_market is not None:
-                matches = match_race_runners(race.active_runners(), bf_market.runners)
-                mine = next(
-                    (mt for mt in matches
-                     if mt.sportsbet_runner.source_id == runner.source_id
-                     and mt.status == "matched"),
-                    None,
-                )
-                if mine and mine.betfair_quote:
-                    q = mine.betfair_quote
-                    rp.betfair_p = q.probability
-                    rp.betfair_reliable = q.reliable
-                    rp.betfair_detail = q.detail
+            mine = next(
+                (mt for mt in race_matches(race)
+                 if mt.sportsbet_runner.source_id == runner.source_id
+                 and mt.status == "matched"),
+                None,
+            )
+            if mine and mine.betfair_quote:
+                q = mine.betfair_quote
+                rp.betfair_p = q.probability
+                rp.betfair_reliable = q.reliable
+                rp.betfair_detail = q.detail
 
         rp.consensus = consensus(
             [
@@ -233,6 +245,8 @@ def assess_quality(
     betfair_ok = all(r.betfair_p is not None and r.betfair_reliable for r in rides)
     if model in ("betfair", "consensus") or betfair_ok:
         if betfair_ok:
+            if any("delayed key" in r.betfair_detail for r in rides):
+                return "HIGH", "all rides matched; Betfair tight on every ride (delayed key)"
             return "HIGH", "all rides matched; Betfair liquid on every ride"
         return "MEDIUM", "all rides matched with Sportsbet prices; Betfair missing or weak"
     return "MEDIUM", "all rides matched with Sportsbet prices; Betfair not used"

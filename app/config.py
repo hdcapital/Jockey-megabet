@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     betfair_min_liquidity: float = 500.0
     # If best-back/best-lay relative spread exceeds this, don't trust midpoint.
     betfair_max_relative_spread: float = 0.25
+    # Delayed application keys (the free tier) report zero matched volume on
+    # every book, so the liquidity gate above can never pass. "auto" detects
+    # that signature per session; "true"/"false" force it.
+    betfair_key_delayed: str = "auto"
+    # With a delayed key reliability rests on the spread alone, so it is
+    # tighter than the liquid-market spread gate.
+    betfair_delayed_max_relative_spread: float = 0.10
 
     # --- Consensus model ----------------------------------------------------
     # Weights used when both sources are available. Documented default:
