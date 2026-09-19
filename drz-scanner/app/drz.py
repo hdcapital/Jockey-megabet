@@ -29,6 +29,7 @@ from app.engine import NoPlaceMarketError, PlaceValuation, value_race
 from app.http import SourceUnavailableError, prune_archive
 from app.logging_setup import setup_logging
 from app.place_model import places_for_field
+from app.reporting.html_report import write_report
 from app.reporting.tables import console, render_scan
 from app.sources.base import RaceStub, SchemaMismatchError
 from app.sources.betfair import (
@@ -88,6 +89,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--allow-uncalibrated", action="store_true",
                    help="let rows priced by an unvalidated win model reach BET")
     p.add_argument("--verbose", "-v", action="store_true")
+    p.add_argument("--quiet", "-q", action="store_true",
+                   help="terminal shows only tables and warnings; the log file "
+                        "still gets everything")
+    p.add_argument("--open", action="store_true",
+                   help="open the live report (data/latest.html) in your browser "
+                        "after the first sweep")
+    p.add_argument("--no-report", action="store_true",
+                   help="do not write data/latest.html")
     return p
 
 
@@ -513,9 +522,8 @@ def _near_jump_ids(stubs: list[RaceStub], settings, now: datetime) -> set[str]:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = get_settings()
-    log_path = setup_logging(
-        logging.DEBUG if args.verbose else logging.INFO, log_dir=settings.log_dir
-    )
+    level = logging.DEBUG if args.verbose else (logging.WARNING if args.quiet else logging.INFO)
+    log_path = setup_logging(level, log_dir=settings.log_dir)
     _apply_overrides(settings, args)
     calibration = load_calibration()
     for_date = args.date or racing_today()
@@ -536,6 +544,7 @@ def main(argv: list[str] | None = None) -> int:
     exit_code = 0
     stubs: list[RaceStub] | None = None
     last_full = 0.0
+    opened = False
     try:
         with SportsbetClient() as sb:
             while True:
@@ -569,15 +578,29 @@ def main(argv: list[str] | None = None) -> int:
                     by_race, skipped = [], []
                 else:
                     exit_code = 0
+                    settled = _settled_bet_count(args.no_db)
+                    retrieved = datetime.now(timezone.utc)
                     render_scan(
-                        by_race,
-                        calibration,
-                        _settled_bet_count(args.no_db),
-                        settings.proven_signal_threshold,
-                        datetime.now(timezone.utc),
-                        show_all=args.show_all,
-                        skipped=skipped,
+                        by_race, calibration, settled, settings.proven_signal_threshold,
+                        retrieved, show_all=args.show_all, skipped=skipped,
                     )
+                    if not args.no_report:
+                        try:
+                            report = write_report(
+                                settings.report_path, by_race=by_race,
+                                calibration=calibration, settled_bets=settled,
+                                proven_threshold=settings.proven_signal_threshold,
+                                retrieved_at=retrieved, skipped=skipped,
+                                refresh_seconds=settings.report_refresh_seconds,
+                            )
+                            console.print(f"[dim]report: {report}[/dim]")
+                            if args.open and not opened:
+                                opened = True
+                                import webbrowser
+
+                                webbrowser.open(report.resolve().as_uri())
+                        except OSError as exc:  # a report must never stop a scan
+                            log.warning("report not written: %s", exc)
                 if not args.loop:
                     return exit_code
 

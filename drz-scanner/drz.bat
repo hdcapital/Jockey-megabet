@@ -54,9 +54,10 @@ if errorlevel 1 (
 )
 
 echo.
-echo   Starting the scanner. Ctrl-C to stop. Log: data\logs\drz.log
+echo   Starting the scanner. Ctrl-C to stop.
+echo   Live report opens in your browser: data\latest.html   Log: data\logs\drz.log
 echo.
-py -m app.drz --loop %*
+py -m app.drz --loop --open --quiet %*
 
 echo.
 pause

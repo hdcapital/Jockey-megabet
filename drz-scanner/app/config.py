@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     # Day-directories older than this are deleted when the scanner starts.
     raw_archive_keep_days: int = 14
     log_dir: Path = DATA_DIR / "logs"
+    # Rewritten after every sweep: every race, every runner, in a browser.
+    report_path: Path = DATA_DIR / "latest.html"
+    report_refresh_seconds: int = 45
 
     # --- Sportsbet ----------------------------------------------------------
     sportsbet_base_url: str = "https://www.sportsbet.com.au"

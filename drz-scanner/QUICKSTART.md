@@ -22,6 +22,23 @@ The other three files:
 | `calibrate.bat` | Refit `lam`/`tau` (and the Sportsbet beta) from real results |
 | `backtest.bat` | Settle stored signals; report ROI, calibration and closing-line value |
 
+## The live report — the easy way to read it
+
+After the first sweep, `drz.bat` opens **`data\latest.html`** in your
+browser. It is rewritten after every sweep and reloads itself every 45
+seconds: every race in jump order, every runner, colour-coded tiers, a
+countdown to each jump, and the reason any row was held back. Leave that
+tab open and ignore the black window.
+
+If it did not open, double-click `data\latest.html` yourself, or run
+`py -m app.drz --loop --open`. Add `--no-report` to skip writing it.
+
+To look at one race on its own in the terminal:
+
+```
+drz-once.bat --meeting Randwick --race 3 --show-all
+```
+
 ## Reading the table
 
 ```
