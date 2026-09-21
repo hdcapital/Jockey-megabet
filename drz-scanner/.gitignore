@@ -1,0 +1,14 @@
+.env
+.installed
+*.crt
+*.key
+*.pem
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+data/*.db
+data/raw/
+data/history/*
+!data/history/.gitkeep
