@@ -21,7 +21,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import get_settings  # noqa: E402
 from app.matching.names import normalize_name  # noqa: E402
-from app.sources.sportsbet import _extract_price, _runner_status, _walk_dicts  # noqa: E402
+from app.sources.sportsbet import (  # noqa: E402
+    SportsbetClient,
+    _extract_price,
+    _find_win_market,
+    _first,
+    _runner_status,
+    _walk_dicts,
+)
 
 _INTERESTING = (
     "id", "name", "runnerName", "horseName", "runnerNumber", "statusCode", "status",
@@ -35,7 +42,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("runner")
     ap.add_argument("--date", default=date.today().isoformat())
-    ap.add_argument("--max", type=int, default=3, help="nodes to print (default 3)")
+    ap.add_argument("--max", type=int, default=12, help="nodes to print (default 12)")
     args = ap.parse_args()
     want = normalize_name(args.runner)
     day_dir = get_settings().raw_archive_dir / "sportsbet" / args.date
@@ -52,22 +59,56 @@ def main() -> int:
                 payload = json.loads(fh.read())
             except ValueError:
                 continue
-        for node in _walk_dicts(payload):
-            name = node.get("runnerName") or node.get("horseName") or node.get("name")
-            if not isinstance(name, str) or normalize_name(name) != want:
+        hits = []
+        # Walk market by market so each selection is shown with its market.
+        for market in _walk_dicts(payload):
+            sels = market.get("selections")
+            if not isinstance(sels, list):
                 continue
-            if not any(k in node for k in ("prices", "price", "winPrice", "jockeyName", "runnerNumber")):
-                continue
+            for node in sels:
+                if not isinstance(node, dict):
+                    continue
+                name = node.get("runnerName") or node.get("horseName") or node.get("name")
+                if isinstance(name, str) and normalize_name(name) == want:
+                    hits.append((market, node))
+        if not hits:
+            continue
+        print(f"\n=== {f.name}  ({meta.get('url', '')[:110]})")
+        win = _find_win_market(payload)
+        if win is not None:
+            wsels = [x for x in win.get("selections", []) if isinstance(x, dict)]
+            print(f"  parser's win market: {_first(win, 'name', 'marketName')!r} id={win.get('id')} "
+                  f"statusCode={win.get('statusCode')!r} selections={len(wsels)} "
+                  f"with jockeyName={sum(1 for x in wsels if x.get('jockeyName'))} "
+                  f"with runnerNumber={sum(1 for x in wsels if x.get('runnerNumber') is not None)}")
+        else:
+            print("  parser's win market: NONE found")
+        for market, node in hits:
             shown += 1
-            print(f"\n--- {f.name}  ({meta.get('url', '')[:110]})")
+            mname = _first(market, "name", "marketName")
+            print(f"  --- in market {mname!r} id={market.get('id')} "
+                  f"marketStatusCode={market.get('statusCode')!r} "
+                  f"{'<== the win market' if market is win else ''}")
             for k in _INTERESTING:
                 if k in node:
-                    print(f"  {k}: {json.dumps(node[k])[:300]}")
+                    print(f"      {k}: {json.dumps(node[k])[:300]}")
             others = sorted(k for k in node if k not in _INTERESTING)
-            print(f"  other keys: {', '.join(others)[:400]}")
-            print(f"  parser says: status={_runner_status(node)!r} price={_extract_price(node)}")
-            if shown >= args.max:
-                return 0
+            print(f"      other keys: {', '.join(others)[:400]}")
+            print(f"      field rule: status={_runner_status(node)!r} price={_extract_price(node)}")
+        try:
+            card = SportsbetClient.parse_racecard(
+                SportsbetClient.__new__(SportsbetClient), payload, event_id="inspect"
+            )
+            for race in card.races:
+                for r in race.runners:
+                    if normalize_name(r.horse_name) == want:
+                        print(f"  PARSED RUNNER: status={r.status!r} win_odds={r.win_odds} "
+                              f"saddlecloth={r.saddlecloth} jockey={r.jockey_name!r} "
+                              f"source_id={r.source_id}")
+        except Exception as exc:  # the inspector must still print the raw nodes
+            print(f"  parse_racecard failed: {type(exc).__name__}: {exc}")
+        if shown >= args.max:
+            return 0
     if not shown:
         print(f"runner {args.runner!r} not found in any archived racecard for {args.date}")
     return 0
