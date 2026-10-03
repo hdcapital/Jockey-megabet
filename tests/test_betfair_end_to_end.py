@@ -396,3 +396,30 @@ def test_scan_status_line_and_check_command(monkeypatch, capsys):
 
 def test_status_summary_when_not_configured():
     assert "not configured" in BetfairStatus().summary()
+
+
+def test_probe_reports_reachable_api_without_credentials(capsys):
+    from app.betfair_check import probe_reachability
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/login":
+            return httpx.Response(200, json={"token": "", "status": "FAIL", "error": "INVALID_APP_KEY"})
+        return httpx.Response(200, json=FakeBetfair._error("NO_SESSION", 1))
+    cfg = settings(betfair_app_key=None)
+    ok = probe_reachability(cfg, ArchivingClient(SOURCE, archive=False,
+                                                 transport=httpx.MockTransport(handler), settings=cfg))
+    out = capsys.readouterr().out
+    assert ok and out.count("[OK  ] reach") == 3 and "NO_SESSION" in out
+
+
+def test_probe_reports_block_page(capsys):
+    from app.betfair_check import probe_reachability
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="<html>Attention Required! | Cloudflare</html>")
+    cfg = settings(betfair_app_key=None)
+    ok = probe_reachability(cfg, ArchivingClient(SOURCE, archive=False,
+                                                 transport=httpx.MockTransport(handler), settings=cfg))
+    out = capsys.readouterr().out
+    assert not ok and out.count("[FAIL] reach") == 3 and "Cloudflare" in out
+    assert "refusing this network" in out

@@ -21,12 +21,14 @@ import sys
 from datetime import date, datetime, timezone
 
 from app.config import PROJECT_ROOT, get_settings
-from app.http import SourceUnavailableError
+from app.http import ArchivingClient, SourceUnavailableError
 from app.logging_setup import setup_logging
 from app.sources.betfair import (
+    SOURCE,
     BetfairClient,
     BetfairLoginError,
     BetfairNotConfiguredError,
+    describe_api_error,
 )
 
 log = logging.getLogger(__name__)
@@ -43,6 +45,67 @@ def _mask(value: str | None, keep: int = 3) -> str:
 def _say(step: str, ok: bool | None, text: str) -> None:
     tag = {True: "OK  ", False: "FAIL", None: "INFO"}[ok]
     print(f"[{tag}] {step}: {text}")
+
+
+def probe_reachability(s, client: ArchivingClient | None = None) -> bool:
+    """Without credentials: can this network reach Betfair's API at all?
+
+    Posts a throwaway login to each identity host and an unauthenticated
+    JSON-RPC call to the betting API. A reachable Betfair answers JSON with
+    its own error code (INVALID_APP_KEY, NO_SESSION, ...); a blocked network
+    gets an HTTP error or an HTML block page. Returns True when every host
+    answered as the API.
+    """
+    client = client or ArchivingClient(SOURCE, archive=False, settings=s)
+    hosts = [s.betfair_identity_url, s.betfair_identity_url_au]
+    all_ok = True
+    for host in hosts:
+        url = host.rstrip("/") + "/api/login"
+        try:
+            res = client.post_json(
+                url, data={"username": "probe", "password": "probe"},
+                headers={"X-Application": "probe", "Accept": "application/json",
+                         "Content-Type": "application/x-www-form-urlencoded"},
+            )
+            try:
+                body = res.json()
+                code = body.get("error") or body.get("status") if isinstance(body, dict) else body
+                _say("reach", True, f"{host} answers as the Betfair API (HTTP {res.status_code}, {code})")
+            except ValueError:
+                all_ok = False
+                _say("reach", False, f"{host} answered HTTP {res.status_code} but not JSON: "
+                     + " ".join(res.body[:200].decode("utf-8", "replace").split()))
+        except SourceUnavailableError as exc:
+            all_ok = False
+            _say("reach", False, f"{host}: {exc.detail}"
+                 + (f" | {exc.body_snippet[:200]}" if exc.body_snippet else ""))
+    try:
+        res = client.post_json(
+            s.betfair_api_url,
+            json_body={"jsonrpc": "2.0", "method": "SportsAPING/v1.0/listEventTypes",
+                       "params": {"filter": {}}, "id": 1},
+            headers={"X-Application": "probe", "Accept": "application/json",
+                     "Content-Type": "application/json"},
+        )
+        try:
+            body = res.json()
+            err = body.get("error") if isinstance(body, dict) else None
+            _say("reach", True, f"{s.betfair_api_url} answers as the Betfair API "
+                 f"(HTTP {res.status_code}, {describe_api_error(err) if err else 'result'})")
+        except ValueError:
+            all_ok = False
+            _say("reach", False, f"betting API answered HTTP {res.status_code} but not JSON: "
+                 + " ".join(res.body[:200].decode("utf-8", "replace").split()))
+    except SourceUnavailableError as exc:
+        all_ok = False
+        _say("reach", False, f"betting API: {exc.detail}"
+             + (f" | {exc.body_snippet[:200]}" if exc.body_snippet else ""))
+    if not all_ok:
+        _say("reach", None, "an HTTP 403 or an HTML page here is Betfair's edge refusing "
+             "this network (cloud/datacenter IPs); credentials cannot help until the "
+             "scanner runs from a network Betfair accepts, e.g. an ordinary Australian "
+             "connection or a self-hosted runner there")
+    return all_ok
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -70,6 +133,8 @@ def run(argv: list[str] | None = None) -> int:
         bf = BetfairClient()
     except BetfairNotConfiguredError as exc:
         _say("config", False, f"{exc}. Put the three BETFAIR_* lines in {env_path}")
+        _say("reach", None, "no credentials, so probing whether Betfair is reachable from here")
+        probe_reachability(s)
         return 1
     _say("config", None, "identity hosts to try: " + ", ".join(bf.identity_urls()))
     _say("config", None, f"betting API: {s.betfair_api_url}")
