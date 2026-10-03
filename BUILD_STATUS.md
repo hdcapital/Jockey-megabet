@@ -41,8 +41,34 @@ Betfair API.
 * **`betfair-check` workflow** runs the diagnosis on GitHub with the
   repository's `BETFAIR_*` secrets; its log is the live verdict.
 
-179 tests pass. The build host's egress policy blocks every Betfair host
+184 tests pass. The build host's egress policy blocks every Betfair host
 and the Betfair developer docs, so no live login could be made here.
+
+**Live verdict from the user's machine (2026-10-03 11:44 AEST):**
+`betfair_check` passed every step (login via identitysso.betfair.com, 121
+AU WIN markets, 12/12 books open, 107 runners priced, 49 reliable) and the
+scan printed `Betfair: connected ...; 121 books (120 open)`. Every runner
+showed `matched 0.0` with the market's own volume non-zero, which confirms
+the runner-level liquidity gate was what kept the exchange out before.
+The same log showed four more things, fixed here with tests:
+
+* The same race was re-matched (and re-logged) once per jockey with a
+  Megabet; matches are now cached per race for the whole scan.
+* Per-ride `consensus fell back` lines (hundreds per scan) are DEBUG now.
+* The "Betfair fair" column was a bare dash whenever any ride failed the
+  gate; it now reads e.g. `3/9 rides` so engagement is visible.
+* A second meeting named `NEWCASTLE` (16 races, class not given) was merged
+  into the thoroughbred Newcastle card. A section's `raceType` now
+  classifies meetings without their own class, and a second meeting with
+  an already-loaded name is skipped with a warning naming both.
+* Runners Betfair has REMOVED but Sportsbet still prices (e.g. `Just In
+  Time`, Randwick R1) are now named in one warning per race instead of
+  being logged as "unmatched"; the two sources disagree, so nothing is
+  overridden.
+
+Still open, outside the Betfair work: once a race has run its rides lose
+their live price, so the Megabet drops to LOW and is hidden rather than
+being valued conditional on the results so far.
 
 **GitHub Actions verdict (runs 37086687517 / 37086845909, 2026-10-03):**
 

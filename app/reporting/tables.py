@@ -23,6 +23,22 @@ def _fmt_pct(v: float | None) -> str:
     return f"{v:+.1%}" if v is not None else DASH
 
 
+def _fmt_betfair(v) -> str:
+    """Betfair fair odds, or how many rides the exchange prices reliably.
+
+    The Betfair model needs every ride reliable; until then the column says
+    "3/9 rides" instead of a bare dash, so a working connection is visible.
+    """
+    odds = v.alt_fair_odds.get("betfair")
+    if odds is not None:
+        return f"{odds:.2f}"
+    rides = getattr(v, "rides", None) or []
+    if not rides or all(r.betfair_detail.startswith("Betfair aggregation") for r in rides):
+        return DASH
+    ok = sum(1 for r in rides if r.betfair_p is not None and r.betfair_reliable)
+    return f"[dim]{ok}/{len(rides)} rides[/dim]"
+
+
 TYPE_LABELS = {"jockey": "Jockey Megabets", "trainer": "Trainer Megabets"}
 
 
@@ -144,7 +160,7 @@ def render_valuations(
             _fmt_odds(v.offer.odds),
             f"{v.fair_probability:.3f}" if v.fair_probability is not None else DASH,
             _fmt_odds((peers.get("sportsbet_novig") or v).alt_fair_odds.get("sportsbet_novig")),
-            _fmt_odds(v.alt_fair_odds.get("betfair")),
+            _fmt_betfair(v),
             _fmt_odds(v.alt_fair_odds.get("consensus")),
             _fmt_pct(v.expected_return),
             v.quality,

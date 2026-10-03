@@ -54,6 +54,7 @@ def gather_meeting_races(
         return {}
     meetings_raw, _ = sb.fetch_meetings(for_date)
     races_by_meeting: dict[str, list[RaceInfo]] = {}
+    seen_names: dict[str, str] = {}
     for meeting in meetings_raw:
         name = _first(meeting, "name", "venueName", "meetingName")
         if not isinstance(name, str):
@@ -61,6 +62,20 @@ def gather_meeting_races(
         if not any(venue_names_match(name, w) for w in wanted if w):
             continue
         key = normalize_name(name)
+        cls = _first(meeting, "className", "raceType", "classType") or (
+            "unknown class" if meeting.get("_class_unknown") else "class not given"
+        )
+        if key in seen_names:
+            # Two meeting nodes with one name (another code or another day's
+            # card at the same venue): merging them would hand a jockey
+            # rides from both. Keep the first and say what was dropped.
+            log.warning(
+                "meeting %r (%s, %d races) skipped: a meeting named %r was already "
+                "loaded for this scan", name, cls,
+                len(_first(meeting, "races", "events") or []), seen_names[key],
+            )
+            continue
+        seen_names[key] = name
         race_nodes = _first(meeting, "races", "events") or []
         for rn in race_nodes:
             if not isinstance(rn, dict):
@@ -75,7 +90,8 @@ def gather_meeting_races(
                 continue
             races_by_meeting.setdefault(key, []).extend(card.races)
         log.info(
-            "meeting %s: %d races retrieved", name, len(races_by_meeting.get(key, []))
+            "meeting %s (%s): %d races retrieved", name, cls,
+            len(races_by_meeting.get(key, [])),
         )
     return races_by_meeting
 

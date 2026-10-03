@@ -423,3 +423,83 @@ def test_probe_reports_block_page(capsys):
     out = capsys.readouterr().out
     assert not ok and out.count("[FAIL] reach") == 3 and "Cloudflare" in out
     assert "refusing this network" in out
+
+
+def test_betfair_scratching_is_named_not_matched(caplog):
+    """A runner Betfair has REMOVED but Sportsbet still prices is reported
+    in one warning and left out of the exchange match."""
+    import logging
+    from app.matching.runners import match_race_runners
+
+    fake = FakeBetfair()
+    bf = client(fake)
+    markets = bf.list_au_win_markets(NOW.date())
+    # Make the fake book REMOVE "2. Horse B" in market 1.100.
+    orig = fake._books
+
+    def books(params):
+        out = orig(params)
+        for b in out:
+            if b["marketId"] == "1.100":
+                for r in b["runners"]:
+                    if r["selectionId"] == 12:
+                        r["status"] = "REMOVED"
+        return out
+    fake._books = books
+    bf.fetch_market_books(markets)
+    m = markets[0]
+    assert m.removed_names == ["2. Horse B"]
+    assert [q.runner_name for q in m.runners] == ["1. Horse A", "3. Horse C"]
+    with caplog.at_level(logging.WARNING, logger="app.matching.runners"):
+        matches = match_race_runners(sportsbet_races()[0].active_runners(), m.runners,
+                                     race_label="Randwick R1",
+                                     removed_on_betfair=m.removed_names)
+    by_name = {mt.sportsbet_runner.horse_name: mt for mt in matches}
+    assert by_name["Horse B"].status == "removed_on_betfair"
+    assert by_name["Horse A"].status == "matched"
+    assert any("Horse B still priced by Sportsbet but REMOVED" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_each_race_is_matched_once_per_scan_not_per_jockey(monkeypatch):
+    import app.engine as engine
+    calls: list[str] = []
+    real = engine.match_race_runners
+
+    def counting(*a, **k):
+        calls.append(k.get("race_label", ""))
+        return real(*a, **k)
+    monkeypatch.setattr(engine, "match_race_runners", counting)
+    fake = FakeBetfair()
+    bf = client(fake)
+    markets = bf.list_au_win_markets(NOW.date())
+    bf.fetch_market_books(markets)
+    races = sportsbet_races()
+    cache: dict = {}
+    other = MegabetOffer(source="sportsbet", market_id="m2", selection_id="s2",
+                         meeting_name="Royal Randwick", meeting_source_id=None,
+                         meeting_date=NOW.date(), jockey_name="Other Jockey",
+                         threshold=1, odds=3.0, market_name="Other Jockey 1+", fetched_at=NOW)
+    value_offer(offer(), races, settings(), markets, now=NOW, ride_cache=cache)
+    value_offer(offer(threshold=2, odds=9.0), races, settings(), markets, now=NOW, ride_cache=cache)
+    value_offer(other, races, settings(), markets, now=NOW, ride_cache=cache)
+    assert sorted(calls) == ["Royal Randwick R1", "Royal Randwick R2"], calls
+
+
+def test_table_shows_ride_coverage_when_betfair_model_unavailable(capsys):
+    from app.reporting import tables
+
+    fake = FakeBetfair()
+    fake.PRICES = dict(fake.PRICES)
+    fake.PRICES[21] = (3.0, 6.0)  # Horse D: 100% spread -> unreliable
+    bf = client(fake)
+    markets = bf.list_au_win_markets(NOW.date())
+    bf.fetch_market_books(markets)
+    vals = value_offer(offer(), sportsbet_races(), settings(), markets, now=NOW)
+    assert next(v for v in vals if v.model == "betfair").fair_odds is None
+    consensus_row = next(v for v in vals if v.model == "consensus")
+    assert tables._fmt_betfair(consensus_row) == "[dim]1/2 rides[/dim]"
+    tables.console.width = 200  # keep the cell on one line for the text check
+    tables.render_valuations(vals, NOW)
+    out = capsys.readouterr().out
+    assert "1/2 rides" in out

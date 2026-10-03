@@ -643,6 +643,18 @@ class SportsbetClient:
         result = self.client.get_json(_url("all_racing", date=for_date.isoformat()))
         payload = result.json()
         meetings: list[dict[str, Any]] = []
+        # A section ({raceType, meetings: [...]}) names the code for every
+        # meeting under it; carry that down so a meeting node without its own
+        # className (seen live: a 16-race "NEWCASTLE" card merged into the
+        # thoroughbred Newcastle meeting) is still classified.
+        section_type: dict[int, str] = {}
+        for node in _walk_dicts(payload):
+            kids = node.get("meetings")
+            stype = _first(node, "raceType", "className", "classType", "sportName")
+            if isinstance(kids, list) and isinstance(stype, str):
+                for kid in kids:
+                    if isinstance(kid, dict):
+                        section_type[id(kid)] = stype
         for node in _walk_dicts(payload):
             # A meeting node references races and has a venue-ish name.
             races = _first(node, "races", "events")
@@ -651,10 +663,14 @@ class SportsbetClient:
                 # Live schema: thoroughbred meetings carry className
                 # "Horses - Aus/NZ" etc.; skip harness/greyhound meetings so
                 # a shared venue name can't mix codes.
-                cls = _first(node, "className", "raceType")
+                cls = _first(node, "className", "raceType", "classType")
+                if not isinstance(cls, str):
+                    cls = section_type.get(id(node))
                 if isinstance(cls, str) and not cls.lower().startswith("horse"):
                     continue
                 if any(isinstance(r, dict) and _first(r, "id", "eventId") for r in races):
+                    if cls is None:
+                        node.setdefault("_class_unknown", True)
                     meetings.append(node)
         if not meetings:
             raise SchemaMismatchError(

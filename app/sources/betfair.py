@@ -208,6 +208,9 @@ class BetfairMarket:
     runners: list[BetfairRunnerQuote] = field(default_factory=list)
     book_status: str | None = None  # None until a book was fetched
     delayed: bool = False  # prices came from a delayed application key
+    # Runners the exchange has REMOVED (scratched), by catalogue name, so a
+    # Sportsbet runner that is still active can be reported as such.
+    removed_names: list[str] = field(default_factory=list)
 
 
 def derive_probability(
@@ -596,6 +599,11 @@ class BetfairClient:
             market.book_status = status
             names = getattr(market, "_catalogue_runners", {})
             active = [r for r in book.get("runners", []) if r.get("status") in (None, "ACTIVE")]
+            market.removed_names = [
+                names.get(r["selectionId"], str(r["selectionId"]))
+                for r in book.get("runners", [])
+                if str(r.get("status", "")).startswith("REMOVED")
+            ]
             if not active:
                 log.warning(
                     "betfair: %s %s book is %s with no active runners "
