@@ -1,5 +1,50 @@
 # BUILD STATUS
 
+## 2026-10-03 — Betfair connection diagnosis and hardening
+
+Report: "it's not connecting to Betfair despite having the API
+requirements." A Betfair failure was one stderr log line plus an em-dash
+column, which reads the same as "no credentials", so the first change is
+visibility; the rest are defects found reviewing the client against the
+Betfair API.
+
+* **`python -m app.betfair_check`** walks config → login → catalogue →
+  books → prices and prints one `[OK]`/`[FAIL]` line per step with
+  Betfair's own error code and the usual fix. Secrets are masked; the
+  password never appears. Exit code says which step failed.
+* **Status line in every scan**: `Betfair: connected via <host>; N AU win
+  markets; M books (K open)` or `Betfair: FAILED — <reason>`.
+* **Login errors carry Betfair's code** (`INVALID_APP_KEY`,
+  `INVALID_USERNAME_OR_PASSWORD`, `PENDING_AUTH`, ...) and a hint
+  (`LOGIN_HINTS`). Before, the message was `login failed: FAIL`.
+* **Australian identity host.** Betfair documents
+  `identitysso.betfair.com.au` for AU/NZ accounts; the default was `.com`
+  with the AU host as a commented-out example. The client now tries the
+  configured host, then the other region, and logs which accepted the
+  login. Lock-out and ban codes are never retried on the second host.
+* **Block pages and non-JSON answers** (Cloudflare "Attention Required",
+  HTML challenges) were a `JSONDecodeError` traceback; they are now a
+  reported `SourceUnavailableError` with the body snippet.
+* **`.env` path.** Settings read `.env` from the current working directory;
+  launched from another directory the credentials were silently absent.
+  It is now read from the project folder.
+* **Liquidity gate** compared `BETFAIR_MIN_LIQUIDITY` against each
+  runner's own matched volume (`r["totalMatched"]`), not the market's as
+  documented, so outsiders failed the gate all morning and the exchange
+  model (which needs every ride reliable) rarely engaged. The gate now uses
+  the market's matched volume; the runner's own is still recorded.
+* **End-to-end test over HTTP** (`tests/test_betfair_end_to_end.py`): a
+  fake Betfair identity host and JSON-RPC API served through the real
+  `ArchivingClient` cover the form login, headers, session renewal, the
+  regional fallback, block pages, APING error codes, delayed-key
+  detection and a Sportsbet racecard valued with a Betfair fair price.
+* **`betfair-check` workflow** runs the diagnosis on GitHub with the
+  repository's `BETFAIR_*` secrets; its log is the live verdict.
+
+177 tests pass. The build host's egress policy blocks every Betfair host
+and the Betfair developer docs, so the live verdict comes from the
+workflow run, not from this environment.
+
 ## 2026-09-19 — Betfair catalogue fix (ported from drz-scanner)
 
 A live run with real credentials on 2026-09-19 showed `listMarketCatalogue`
