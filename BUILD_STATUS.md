@@ -41,9 +41,24 @@ Betfair API.
 * **`betfair-check` workflow** runs the diagnosis on GitHub with the
   repository's `BETFAIR_*` secrets; its log is the live verdict.
 
-177 tests pass. The build host's egress policy blocks every Betfair host
-and the Betfair developer docs, so the live verdict comes from the
-workflow run, not from this environment.
+179 tests pass. The build host's egress policy blocks every Betfair host
+and the Betfair developer docs, so no live login could be made here.
+
+**GitHub Actions verdict (runs 37086687517 / 37086845909, 2026-10-03):**
+
+* The repository has **no** `BETFAIR_APP_KEY`, `BETFAIR_USERNAME` or
+  `BETFAIR_PASSWORD` secrets (the "Secrets present?" step printed NOT SET
+  for all three), so the check stopped at the config step.
+* Without credentials the reachability probe showed that
+  `identitysso.betfair.com`, `identitysso.betfair.com.au` and
+  `api.betfair.com` all answer a GitHub-hosted runner with **HTTP 403 and
+  a Cloudflare block page**, so credentials would not have helped: Betfair
+  refuses GitHub's datacenter IPs, as the 2026-08-22 note already recorded.
+  Sportsbet answers the same runner with its "Location Error" page.
+* The live verdict therefore has to come from the user's own Australian
+  machine: `python -m app.betfair_check` there prints the step that fails
+  and Betfair's own reason. A self-hosted runner in Australia with the
+  three secrets would make the `betfair-check` workflow meaningful.
 
 ## 2026-09-19 — Betfair catalogue fix (ported from drz-scanner)
 
