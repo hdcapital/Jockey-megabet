@@ -91,7 +91,7 @@ def main() -> int:
                   f"{'<== the win market' if market is win else ''}")
             for k in _INTERESTING:
                 if k in node:
-                    print(f"      {k}: {json.dumps(node[k])[:300]}")
+                    print(f"      {k}: {json.dumps(node[k])[:900]}")
             others = sorted(k for k in node if k not in _INTERESTING)
             print(f"      other keys: {', '.join(others)[:400]}")
             print(f"      field rule: status={_runner_status(node)!r} price={_extract_price(node)}")

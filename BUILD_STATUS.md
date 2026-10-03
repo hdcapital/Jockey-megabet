@@ -66,6 +66,23 @@ The same log showed four more things, fixed here with tests:
   being logged as "unmatched"; the two sources disagree, so nothing is
   overridden.
 
+**Scratchings were being priced (found via the Betfair cross-check, fixed
+with the user's archived payload, 2026-10-03 12:24 AEST).** The exchange
+reported dozens of runners REMOVED that Sportsbet still "priced" (9 of 20
+in Flemington R5); the website confirmed `Just In Time` (Randwick R1) was
+scratched. `scripts/inspect_runner.py` on the archived racecard showed the
+live shape: in the "Win or Place" market the scratched selection has
+`statusCode "S"` while the market stays `"A"`, and its `prices` list still
+carries NTP/NTS entries and a stale live price (26.0). The parser's rule
+("S" only counts when no price is left) therefore kept the runner active at
+$26 with its jockey booked, inflating every overround and leaving stale
+rides (the "ambiguous Brodie Loy" booking) in the model. Now a selection
+"S" inside an open market is a scratching whatever its prices say (a
+market-wide "S" is a suspension, not a scratching), a scratched runner is
+never priced, and a price-code-tagged list yields only the "L" entry.
+Regression tests in `tests/test_sportsbet_scratchings.py` use the real
+shape. 188 tests pass.
+
 Still open, outside the Betfair work: once a race has run its rides lose
 their live price, so the Megabet drops to LOW and is hidden rather than
 being valued conditional on the results so far.

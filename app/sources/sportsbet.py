@@ -121,8 +121,15 @@ def _extract_price(node: dict[str, Any]) -> float | None:
                 return inner
     prices = node.get("prices")
     if isinstance(prices, list):
-        for p in prices:
-            if isinstance(p, dict) and p.get("priceCode") in ("L", None):
+        entries = [p for p in prices if isinstance(p, dict)]
+        tagged = any("priceCode" in p for p in entries)
+        for p in entries:
+            # In a tagged list only the live ("L") entry is a win price; an
+            # untagged entry is accepted only when nothing in the list is
+            # tagged (older shapes). Live 2026-10-03: a scratched runner's
+            # list still held NTP/NTS and other entries with a winPrice.
+            code = p.get("priceCode")
+            if (tagged and code == "L") or (not tagged and code is None):
                 inner = _extract_price(p)
                 if inner:
                     return inner
@@ -727,11 +734,13 @@ class SportsbetClient:
         seen_ids: set[str] = set()
         seen_names: set[str] = set()
         win_market = _find_win_market(payload)
+        win_market_code = ""
         if win_market is not None:
             candidate_nodes: list[dict[str, Any]] = [
                 s for s in win_market.get("selections", []) if isinstance(s, dict)
             ]
             in_win_market = True
+            win_market_code = str(win_market.get("statusCode") or "").strip().upper()
         else:
             # Fallback for unknown layouts: whole-document walk, jockey-keyed.
             candidate_nodes = list(_walk_dicts(payload))
@@ -759,11 +768,20 @@ class SportsbetClient:
             saddle = _first(node, "runnerNumber", "saddlecloth", "number", "barrierNumber")
             price = _extract_price(node)
             rstatus = _runner_status(node)
-            # Live schema: a scratched runner's selection flips to
-            # statusCode "S" and its live ("L") win price is withdrawn.
+            # Live schema (verified 2026-10-03 against a scratched runner,
+            # "Just In Time", Randwick R1): a scratching flips the selection's
+            # statusCode to "S" while the market stays "A", and the price
+            # list may STILL carry entries (NTP/NTS and a stale live price).
+            # So "S" inside an open market is a scratching whatever the
+            # prices say; when the whole market is "S" (suspended) the
+            # selection code is not evidence, and only a withdrawn price
+            # marks a runner scratched.
             sel_code = str(node.get("statusCode") or "").strip().upper()
-            if rstatus == "active" and sel_code == "S" and price is None:
-                rstatus = "scratched"
+            if rstatus == "active" and sel_code == "S":
+                if win_market_code != "S" or price is None:
+                    rstatus = "scratched"
+            if rstatus == "scratched":
+                price = None  # a scratched runner has no win price
             runners.append(
                 RunnerInfo(
                     source=SOURCE,
