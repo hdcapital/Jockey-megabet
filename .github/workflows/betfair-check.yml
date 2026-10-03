@@ -1,0 +1,55 @@
+# Betfair connectivity check: logs in with the repository's BETFAIR_* secrets
+# and walks login -> catalogue -> books -> prices, printing one verdict line
+# per step (python -m app.betfair_check). Nothing secret is printed: the key
+# and username are masked and the password never appears.
+#
+# GitHub-hosted runners have US datacenter IPs that Betfair's edge may refuse
+# (a 403 block page at the login step says so explicitly). A self-hosted
+# runner in Australia (`runs-on: [self-hosted]`) sees the real account state.
+
+name: betfair-check
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - claude/betfair-connectivity-*
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Unit tests (no network)
+        run: python -m pytest -q
+      - name: Secrets present?
+        env:
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_USERNAME: ${{ secrets.BETFAIR_USERNAME }}
+          BETFAIR_PASSWORD: ${{ secrets.BETFAIR_PASSWORD }}
+        run: |
+          for v in BETFAIR_APP_KEY BETFAIR_USERNAME BETFAIR_PASSWORD; do
+            val="${!v}"
+            if [ -n "$val" ]; then echo "$v: set (${#val} chars)"; else echo "$v: NOT SET in repository secrets"; fi
+          done
+      - name: Betfair step-by-step check
+        env:
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_USERNAME: ${{ secrets.BETFAIR_USERNAME }}
+          BETFAIR_PASSWORD: ${{ secrets.BETFAIR_PASSWORD }}
+          ARCHIVE_RAW_RESPONSES: "false"
+        run: python -m app.betfair_check -v
+      - name: Betfair-only scan (shows the status line the scanner prints)
+        if: always()
+        continue-on-error: true
+        env:
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_USERNAME: ${{ secrets.BETFAIR_USERNAME }}
+          BETFAIR_PASSWORD: ${{ secrets.BETFAIR_PASSWORD }}
+          ARCHIVE_RAW_RESPONSES: "false"
+        run: python -m app.scan --no-db --show-low

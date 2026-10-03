@@ -12,7 +12,7 @@ price and visible available volume, then derive:
 
 * both sides present and relative spread <= ``BETFAIR_MAX_RELATIVE_SPREAD``:
   probability = 1 / midpoint(back, lay), marked reliable when the market's
-  total available-to-back volume >= ``BETFAIR_MIN_LIQUIDITY``.
+  total matched volume >= ``BETFAIR_MIN_LIQUIDITY``.
 * one side missing or the spread too wide: probability derived from the back
   price alone and marked unreliable (kept for the record, excluded from
   consensus by default).
@@ -67,6 +67,117 @@ def market_is_delayed(book: dict[str, Any]) -> bool:
 
 class BetfairNotConfiguredError(Exception):
     """Raised when Betfair credentials are absent — a normal, reported state."""
+
+
+class BetfairLoginError(SourceUnavailableError):
+    """Betfair answered the login call but refused it.
+
+    ``code`` is Betfair's own ``error``/``loginStatus`` value (for example
+    ``INVALID_APP_KEY``) and ``hint`` says what usually fixes it.
+    """
+
+    def __init__(self, url: str, code: str, hint: str, status: int | None = None):
+        self.code = code
+        self.hint = hint
+        super().__init__(SOURCE, url, f"login refused: {code} — {hint}", status)
+
+
+#: Betfair interactive-login error codes and what each one usually means.
+#: A code outside this table is still reported verbatim.
+LOGIN_HINTS: dict[str, str] = {
+    "INVALID_USERNAME_OR_PASSWORD": (
+        "Betfair rejected the username/password on this identity host. Check "
+        "BETFAIR_USERNAME / BETFAIR_PASSWORD (no quotes or trailing spaces in "
+        ".env); Australian/NZ accounts log in at identitysso.betfair.com.au; "
+        "with two-factor auth enabled, append the current 2FA code to the "
+        "password"
+    ),
+    "INVALID_APP_KEY": (
+        "BETFAIR_APP_KEY is not a key Betfair recognises. Copy it from "
+        "developer.betfair.com -> My Account -> API keys (the Delayed key "
+        "works at once; the Live key only after Betfair activates it)"
+    ),
+    "ACCOUNT_NOW_LOCKED": "the account is locked after failed logins; unlock it on the Betfair site",
+    "ACCOUNT_ALREADY_LOCKED": "the account is locked; unlock it on the Betfair site",
+    "PENDING_AUTH": "the account needs a verification step on the Betfair site before the API will log it in",
+    "TEMPORARY_BAN_TOO_MANY_REQUESTS": "too many login attempts; wait 20+ minutes before trying again",
+    "SECURITY_RESTRICTED_LOCATION": "Betfair refuses logins from this location/IP (VPN, datacenter or geo-restricted); run from an ordinary Australian connection",
+    "BETTING_RESTRICTED_LOCATION": "betting is restricted from this location; the API still refuses the login",
+    "ACCOUNT_PENDING_PASSWORD_CHANGE": "Betfair requires a password change on the website first",
+    "CHANGE_PASSWORD_REQUIRED": "Betfair requires a password change on the website first",
+    "SECURITY_QUESTION_WRONG_3X": "security question failed three times; resolve on the Betfair site",
+    "KYC_SUSPEND": "the account is suspended pending identity verification (KYC)",
+    "SUSPENDED": "the account is suspended; contact Betfair",
+    "CLOSED": "the account is closed",
+    "SELF_EXCLUDED": "the account is self-excluded",
+    "INVALID_CONNECTIVITY_TO_REGULATOR_DK": "Betfair cannot reach the regulator; try again later",
+    "INVALID_CONNECTIVITY_TO_REGULATOR_IT": "Betfair cannot reach the regulator; try again later",
+    "NOT_AUTHORIZED_BY_REGULATOR_DK": "the account is not authorised by its regulator",
+    "NOT_AUTHORIZED_BY_REGULATOR_IT": "the account is not authorised by its regulator",
+    "DANISH_AUTHORIZATION_REQUIRED": "Danish authorisation is required for this account",
+    "SPAIN_MIGRATION_REQUIRED": "the account must be migrated on the Betfair site",
+    "DENMARK_MIGRATION_REQUIRED": "the account must be migrated on the Betfair site",
+    "SPANISH_TERMS_ACCEPTANCE_REQUIRED": "terms must be accepted on the Betfair site",
+    "ITALIAN_CONTRACT_ACCEPTANCE_REQUIRED": "terms must be accepted on the Betfair site",
+    "CERT_AUTH_REQUIRED": "this account must use certificate login; set BETFAIR_CERT_FILE / BETFAIR_KEY_FILE",
+    "ITALIAN_PROFILING_ACCEPTANCE_REQUIRED": "profiling consent must be given on the Betfair site",
+    "AUTHORIZED_ONLY_FOR_DOMAIN_RO": "the account is authorised only on betfair.ro",
+    "AUTHORIZED_ONLY_FOR_DOMAIN_SE": "the account is authorised only on betfair.se",
+    "INPUT_VALIDATION_ERROR": "the login request was malformed (empty username or password?)",
+    "INTERNATIONAL_TERMS_ACCEPTANCE_REQUIRED": "terms must be accepted on the Betfair site",
+    "EMAIL_LOGIN_NOT_ALLOWED": "log in with the Betfair username, not the email address",
+    "MULTIPLE_USERS_WITH_SAME_CREDENTIAL": "the credentials match more than one account; contact Betfair",
+    "ACCOUNT_PENDING_DISPLAY_NAME_CHANGE": "a display name change is pending on the Betfair site",
+    "ACTIONS_REQUIRED": "Betfair requires an action on the website before the API will log in",
+    "SWEDEN_BANK_ID_VERIFICATION_REQUIRED": "BankID verification is required",
+    "SWEDEN_NATIONAL_IDENTIFIER_REQUIRED": "a national identifier is required",
+    "TRADING_MASTER": "a trading master account cannot log in here",
+    "TRADING_MASTER_SUSPENDED": "the trading master account is suspended",
+    "AGENT_CLIENT_MASTER": "an agent client master account cannot log in here",
+    "AGENT_CLIENT_MASTER_SUSPENDED": "the agent client master account is suspended",
+    "NOT_WHITELISTED": "this API client is not whitelisted; contact Betfair",
+}
+
+#: Login failures that should NOT be retried on the other identity host,
+#: because another attempt could make the account's situation worse.
+_NO_FALLBACK_CODES = {
+    "ACCOUNT_NOW_LOCKED", "ACCOUNT_ALREADY_LOCKED", "TEMPORARY_BAN_TOO_MANY_REQUESTS",
+    "PENDING_AUTH", "SECURITY_RESTRICTED_LOCATION", "SECURITY_QUESTION_WRONG_3X",
+    "INVALID_APP_KEY", "INPUT_VALIDATION_ERROR",
+}
+
+
+@dataclass
+class BetfairStatus:
+    """What the exchange side of a scan actually did, for the status line."""
+
+    configured: bool = False
+    logged_in: bool = False
+    identity_host: str | None = None
+    catalogue_markets: int = 0
+    books_returned: int = 0
+    open_books: int = 0
+    delayed: bool = False
+    error: str | None = None
+    hint: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.configured and self.logged_in and self.error is None
+
+    def summary(self) -> str:
+        if not self.configured:
+            return "Betfair: not configured (BETFAIR_APP_KEY / BETFAIR_USERNAME unset) — Sportsbet-only"
+        if self.error:
+            return f"Betfair: FAILED — {self.error}"
+        parts = [
+            f"Betfair: connected via {self.identity_host}",
+            f"{self.catalogue_markets} AU win markets",
+            f"{self.books_returned} books ({self.open_books} open)",
+        ]
+        if self.delayed:
+            parts.append("DELAYED key (spread-only reliability)")
+        return "; ".join(parts)
 
 
 @dataclass
@@ -144,43 +255,160 @@ def derive_probability(
     return 1.0 / side, False, f"only best {name} available"
 
 
+#: APING error codes that are worth a plain-English line.
+API_ERROR_HINTS: dict[str, str] = {
+    "INVALID_APP_KEY": "the application key is not recognised",
+    "INVALID_SESSION_INFORMATION": "the session token is missing or expired",
+    "NO_SESSION": "no session token was sent",
+    "NO_APP_KEY": "no application key was sent",
+    "TOO_MUCH_DATA": "the request exceeded Betfair's data-weight limit (200)",
+    "TOO_MANY_REQUESTS": "request rate limit hit; slow down",
+    "SERVICE_BUSY": "Betfair is busy; retry shortly",
+    "TIMEOUT_ERROR": "Betfair timed out; retry shortly",
+    "UNEXPECTED_ERROR": "Betfair reported an internal error",
+    "ACCESS_DENIED": "this application key is not allowed to call this method",
+    "INVALID_INPUT_DATA": "the request parameters were rejected",
+    "REQUEST_SIZE_EXCEEDS_LIMIT": "the request was too large",
+}
+
+
+def describe_api_error(error: Any) -> str:
+    """Betfair's JSON-RPC error with its APING code and a hint if known."""
+    code = None
+    if isinstance(error, dict):
+        data = error.get("data") or {}
+        exc = data.get("APINGException") if isinstance(data, dict) else None
+        if isinstance(exc, dict):
+            code = exc.get("errorCode")
+        if code is None:
+            code = error.get("message")
+    text = json.dumps(error) if not isinstance(error, str) else error
+    if code and code in API_ERROR_HINTS:
+        return f"{code} ({API_ERROR_HINTS[code]}): {text}"
+    return text
+
+
 class BetfairClient:
-    def __init__(self, client: ArchivingClient | None = None):
-        self.settings = get_settings()
+    def __init__(self, client: ArchivingClient | None = None, settings: Any = None):
+        self.settings = settings or get_settings()
         if not (self.settings.betfair_app_key and self.settings.betfair_username):
             raise BetfairNotConfiguredError(
                 "BETFAIR_APP_KEY / BETFAIR_USERNAME not set; Betfair benchmark disabled"
             )
+        self.status.configured = True
         self.client = client or ArchivingClient(SOURCE)
         self._session_token: str | None = None
+
+    @property
+    def status(self) -> BetfairStatus:
+        """Outcome of this client's calls so far (created on first use)."""
+        st = self.__dict__.get("_status")
+        if st is None:
+            st = self.__dict__["_status"] = BetfairStatus()
+        return st
 
     def close(self) -> None:
         self.client.close()
 
     # -- auth -----------------------------------------------------------
-    def login(self) -> None:
+    def _uses_cert_login(self) -> bool:
         s = self.settings
-        if s.betfair_cert_file and s.betfair_key_file:
-            url = f"{s.betfair_identity_cert_url}/api/certlogin"
+        return bool(s.betfair_cert_file and s.betfair_key_file)
+
+    def identity_urls(self) -> list[str]:
+        """Login URLs to try, configured host first, then the other region.
+
+        Betfair keeps Australian/NZ accounts on identitysso.betfair.com.au
+        and everyone else on identitysso.betfair.com; a username that
+        exists on one is "invalid" on the other. Trying both (and saying
+        which one worked) beats failing on a regional default.
+        """
+        s = self.settings
+        if self._uses_cert_login():
+            hosts = [s.betfair_identity_cert_url, s.betfair_identity_cert_url_au]
+            path = "/api/certlogin"
         else:
-            url = f"{s.betfair_identity_url}/api/login"
+            hosts = [s.betfair_identity_url, s.betfair_identity_url_au]
+            path = "/api/login"
+        urls: list[str] = []
+        for h in hosts:
+            if h:
+                u = h.rstrip("/") + path
+                if u not in urls:
+                    urls.append(u)
+        return urls
+
+    def _login_once(self, url: str) -> str:
+        """POST the credentials to one identity URL; return the session token."""
+        s = self.settings
         result = self.client.post_json(
             url,
             data={"username": s.betfair_username, "password": s.betfair_password or ""},
             headers={
                 "X-Application": s.betfair_app_key or "",
+                "Accept": "application/json",
                 "Content-Type": "application/x-www-form-urlencoded",
             },
         )
-        body = result.json()
-        token = body.get("token") or body.get("sessionToken")
-        status = body.get("status") or body.get("loginStatus")
-        if not token:
+        try:
+            body = result.json()
+        except ValueError:
+            snippet = " ".join(result.body[:300].decode("utf-8", "replace").split())
             raise SourceUnavailableError(
-                SOURCE, url, f"login failed: {status or body}", result.status_code
+                SOURCE, url,
+                "login answered with something other than JSON (a block page or "
+                "challenge rather than the API)",
+                result.status_code, snippet or None,
+            ) from None
+        if not isinstance(body, dict):
+            raise SourceUnavailableError(SOURCE, url, f"unexpected login body: {body!r}")
+        token = body.get("token") or body.get("sessionToken")
+        status = body.get("status") or body.get("loginStatus") or ""
+        code = body.get("error") or status or "UNKNOWN"
+        if token and status in ("SUCCESS", "", None):
+            return token
+        if token:
+            # SUCCESS is the only status that comes with a usable token.
+            log.warning("betfair: login returned a token with status %s", status)
+            return token
+        hint = LOGIN_HINTS.get(code, "see Betfair's login error documentation")
+        raise BetfairLoginError(url, code, hint, result.status_code)
+
+    def login(self) -> None:
+        """Obtain a session token, trying the regional identity hosts in turn.
+
+        Raises :class:`BetfairLoginError` (with Betfair's code and a hint) or
+        :class:`SourceUnavailableError` carrying every attempt's outcome.
+        """
+        attempts: list[str] = []
+        last: SourceUnavailableError | None = None
+        for url in self.identity_urls():
+            try:
+                token = self._login_once(url)
+            except BetfairLoginError as exc:
+                attempts.append(f"{url}: {exc.code}")
+                last = exc
+                log.warning("betfair: login at %s refused: %s", url, exc.code)
+                if exc.code in _NO_FALLBACK_CODES:
+                    break
+                continue
+            except SourceUnavailableError as exc:
+                attempts.append(f"{url}: {exc.detail}")
+                last = exc
+                log.warning("betfair: login at %s failed: %s", url, exc.detail)
+                continue
+            self._session_token = token
+            self.status.logged_in = True
+            self.status.identity_host = url.split("/api/")[0].replace("https://", "")
+            log.info("betfair: login ok via %s", url)
+            return
+        assert last is not None
+        if len(attempts) > 1 and isinstance(last, BetfairLoginError):
+            raise BetfairLoginError(
+                last.url, last.code,
+                last.hint + " (tried " + "; ".join(attempts) + ")", last.status,
             )
-        self._session_token = token
-        log.info("betfair: login ok")
+        raise last
 
     def _rpc(self, method: str, params: dict[str, Any], _retry: bool = True) -> Any:
         if self._session_token is None:
@@ -197,10 +425,24 @@ class BetfairClient:
             headers={
                 "X-Application": s.betfair_app_key or "",
                 "X-Authentication": self._session_token or "",
+                "Accept": "application/json",
                 "Content-Type": "application/json",
             },
         )
-        body = result.json()
+        try:
+            body = result.json()
+        except ValueError:
+            snippet = " ".join(result.body[:300].decode("utf-8", "replace").split())
+            raise SourceUnavailableError(
+                SOURCE, s.betfair_api_url,
+                f"{method} answered with something other than JSON (a block page "
+                "or challenge rather than the API)",
+                result.status_code, snippet or None,
+            ) from None
+        if not isinstance(body, dict):
+            raise SourceUnavailableError(
+                SOURCE, s.betfair_api_url, f"{method}: unexpected body {body!r}"
+            )
         if "error" in body:
             # A session token lasts hours, not days. In a long loop the first
             # sign of expiry is this error code; one fresh login fixes it.
@@ -211,7 +453,7 @@ class BetfairClient:
                 self.login()
                 return self._rpc(method, params, _retry=False)
             raise SourceUnavailableError(
-                SOURCE, s.betfair_api_url, f"{method} error: {body['error']}"
+                SOURCE, s.betfair_api_url, f"{method} error: {describe_api_error(body['error'])}"
             )
         return body.get("result")
 
@@ -286,7 +528,14 @@ class BetfairClient:
                 }
                 markets.append(bm)
             cursor = chunk_to
+        self.status.catalogue_markets = len(markets)
         log.info("betfair: %d AU win markets in catalogue", len(markets))
+        if not markets:
+            log.warning(
+                "betfair: the catalogue has no Australian WIN markets starting "
+                "within 14h before / 38h after %s UTC — nothing for the exchange "
+                "to price (wrong --date, or no AU racing in that span)", for_date,
+            )
         return markets
 
     def fetch_market_books(self, markets: list[BetfairMarket]) -> None:
@@ -326,6 +575,11 @@ class BetfairClient:
                 "Set BETFAIR_KEY_DELAYED=false to override.",
                 len(books_by_id), s.betfair_delayed_max_relative_spread * 100,
             )
+        self.status.books_returned = len(books_by_id)
+        self.status.open_books = sum(
+            1 for b in books_by_id.values() if b.get("status") == "OPEN"
+        )
+        self.status.delayed = delayed
 
         missing = 0
         for market in markets:
@@ -357,7 +611,13 @@ class BetfairClient:
                 back_vol = backs[0]["size"] if backs else None
                 best_lay = lays[0]["price"] if lays else None
                 lay_vol = lays[0]["size"] if lays else None
-                total = r.get("totalMatched") or book.get("totalMatched")
+                # The liquidity gate is on the market's matched volume (as
+                # documented): a $500 gate on each runner's own volume would
+                # exclude most outsiders all morning, and a Megabet needs
+                # every ride reliable before the exchange model engages.
+                runner_total = r.get("totalMatched")
+                market_total = book.get("totalMatched")
+                total = market_total if market_total else runner_total
                 prob, reliable, detail = derive_probability(
                     best_back,
                     best_lay,
@@ -378,7 +638,7 @@ class BetfairClient:
                         best_lay=best_lay,
                         back_volume=back_vol,
                         lay_volume=lay_vol,
-                        total_matched=total,
+                        total_matched=runner_total if runner_total is not None else total,
                         market_status=status,
                         fetched_at=fetched_at,
                         probability=prob,

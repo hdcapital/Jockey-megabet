@@ -16,8 +16,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
+    # The .env file is looked up next to the project, not in the current
+    # working directory, so the scanner finds its credentials however it is
+    # launched (double-clicked .bat, systemd unit, another shell directory).
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=str(PROJECT_ROOT / ".env"), env_file_encoding="utf-8", extra="ignore"
     )
 
     # --- Database -----------------------------------------------------------
@@ -51,8 +54,14 @@ class Settings(BaseSettings):
     # Optional certificate (non-interactive) login
     betfair_cert_file: str | None = None
     betfair_key_file: str | None = None
+    # Betfair runs a separate identity host for Australian and New Zealand
+    # accounts (identitysso.betfair.com.au). The configured host is tried
+    # first; when it rejects the username/password the other one is tried
+    # and the log says which host accepted the login.
     betfair_identity_url: str = "https://identitysso.betfair.com"
     betfair_identity_cert_url: str = "https://identitysso-cert.betfair.com"
+    betfair_identity_url_au: str = "https://identitysso.betfair.com.au"
+    betfair_identity_cert_url_au: str = "https://identitysso-cert.betfair.com.au"
     betfair_api_url: str = "https://api.betfair.com/exchange/betting/json-rpc/v1"
     # Below this total available-to-back volume (AUD) a Betfair-derived
     # probability is flagged low-confidence.

@@ -167,6 +167,24 @@ def print_no_megabets(retrieved_at: datetime) -> None:
     )
 
 
+def print_betfair_status(status) -> None:
+    """One line saying whether the exchange engaged this scan, and why not.
+
+    Without it a Betfair failure was a single stderr log line and an em-dash
+    column, which reads the same as "no credentials".
+    """
+    text = status.summary()
+    if not status.configured:
+        console.print(f"[yellow]{text}[/yellow]")
+    elif status.error:
+        console.print(f"[red]{text}[/red]")
+        console.print(
+            "[red]Run  python -m app.betfair_check  for a step-by-step diagnosis.[/red]"
+        )
+    else:
+        console.print(f"[green]{text}[/green]")
+
+
 def print_source_unavailable(source: str, detail: str) -> None:
     console.print(
         f"[red]Data source unavailable — {source}: {detail}[/red]\n"
