@@ -38,6 +38,7 @@ def match_race_runners(
     sportsbet_runners: list[RunnerInfo],
     betfair_quotes: list[BetfairRunnerQuote],
     race_label: str = "",
+    removed_on_betfair: list[str] | None = None,
 ) -> list[RunnerMatch]:
     """Pair runners within one already-matched race.
 
@@ -57,10 +58,22 @@ def match_race_runners(
         if q.cloth_number is not None:
             by_cloth.setdefault(q.cloth_number, []).append(q)
 
+    removed_keys = {normalize_name(n) for n in (removed_on_betfair or [])}
     unmatched: list[str] = []
+    scratched_on_betfair: list[str] = []
     for sr in sportsbet_runners:
         key = normalize_name(sr.horse_name)
         candidates: list[BetfairRunnerQuote] = []
+        if key in removed_keys:
+            # The exchange has scratched this runner while Sportsbet still
+            # prices it. Two sources disagree, so it is reported, not
+            # resolved: the Sportsbet model keeps it, the exchange cannot.
+            matches.append(
+                RunnerMatch(sr, None, "removed_on_betfair",
+                            "Betfair lists this runner as REMOVED (scratched)")
+            )
+            scratched_on_betfair.append(sr.horse_name)
+            continue
         if sr.saddlecloth is not None and len(by_cloth.get(sr.saddlecloth, [])) == 1:
             cand = by_cloth[sr.saddlecloth][0]
             if runner_names_match(sr.horse_name, cand.runner_name):
@@ -88,8 +101,16 @@ def match_race_runners(
             )
             log.warning("ambiguous Betfair runner match for %s", sr.horse_name)
 
+    if scratched_on_betfair:
+        log.warning(
+            "betfair runners %s: %s still priced by Sportsbet but REMOVED "
+            "(scratched) on Betfair — check the Sportsbet card; a stale "
+            "Sportsbet runner inflates the overround and may carry a stale "
+            "jockey booking",
+            race_label or "(race)", ", ".join(scratched_on_betfair),
+        )
     if unmatched:
-        matched = len(sportsbet_runners) - len(unmatched)
+        matched = len(sportsbet_runners) - len(unmatched) - len(scratched_on_betfair)
         sample = ", ".join(q.runner_name for q in betfair_quotes[:4]) or "(no runners)"
         level = log.warning if matched * 2 < len(sportsbet_runners) else log.info
         level(

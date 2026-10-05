@@ -1,5 +1,108 @@
 # BUILD STATUS
 
+## 2026-10-03 — Betfair connection diagnosis and hardening
+
+Report: "it's not connecting to Betfair despite having the API
+requirements." A Betfair failure was one stderr log line plus an em-dash
+column, which reads the same as "no credentials", so the first change is
+visibility; the rest are defects found reviewing the client against the
+Betfair API.
+
+* **`python -m app.betfair_check`** walks config → login → catalogue →
+  books → prices and prints one `[OK]`/`[FAIL]` line per step with
+  Betfair's own error code and the usual fix. Secrets are masked; the
+  password never appears. Exit code says which step failed.
+* **Status line in every scan**: `Betfair: connected via <host>; N AU win
+  markets; M books (K open)` or `Betfair: FAILED — <reason>`.
+* **Login errors carry Betfair's code** (`INVALID_APP_KEY`,
+  `INVALID_USERNAME_OR_PASSWORD`, `PENDING_AUTH`, ...) and a hint
+  (`LOGIN_HINTS`). Before, the message was `login failed: FAIL`.
+* **Australian identity host.** Betfair documents
+  `identitysso.betfair.com.au` for AU/NZ accounts; the default was `.com`
+  with the AU host as a commented-out example. The client now tries the
+  configured host, then the other region, and logs which accepted the
+  login. Lock-out and ban codes are never retried on the second host.
+* **Block pages and non-JSON answers** (Cloudflare "Attention Required",
+  HTML challenges) were a `JSONDecodeError` traceback; they are now a
+  reported `SourceUnavailableError` with the body snippet.
+* **`.env` path.** Settings read `.env` from the current working directory;
+  launched from another directory the credentials were silently absent.
+  It is now read from the project folder.
+* **Liquidity gate** compared `BETFAIR_MIN_LIQUIDITY` against each
+  runner's own matched volume (`r["totalMatched"]`), not the market's as
+  documented, so outsiders failed the gate all morning and the exchange
+  model (which needs every ride reliable) rarely engaged. The gate now uses
+  the market's matched volume; the runner's own is still recorded.
+* **End-to-end test over HTTP** (`tests/test_betfair_end_to_end.py`): a
+  fake Betfair identity host and JSON-RPC API served through the real
+  `ArchivingClient` cover the form login, headers, session renewal, the
+  regional fallback, block pages, APING error codes, delayed-key
+  detection and a Sportsbet racecard valued with a Betfair fair price.
+* **`betfair-check` workflow** runs the diagnosis on GitHub with the
+  repository's `BETFAIR_*` secrets; its log is the live verdict.
+
+184 tests pass. The build host's egress policy blocks every Betfair host
+and the Betfair developer docs, so no live login could be made here.
+
+**Live verdict from the user's machine (2026-10-03 11:44 AEST):**
+`betfair_check` passed every step (login via identitysso.betfair.com, 121
+AU WIN markets, 12/12 books open, 107 runners priced, 49 reliable) and the
+scan printed `Betfair: connected ...; 121 books (120 open)`. Every runner
+showed `matched 0.0` with the market's own volume non-zero, which confirms
+the runner-level liquidity gate was what kept the exchange out before.
+The same log showed four more things, fixed here with tests:
+
+* The same race was re-matched (and re-logged) once per jockey with a
+  Megabet; matches are now cached per race for the whole scan.
+* Per-ride `consensus fell back` lines (hundreds per scan) are DEBUG now.
+* The "Betfair fair" column was a bare dash whenever any ride failed the
+  gate; it now reads e.g. `3/9 rides` so engagement is visible.
+* A second meeting named `NEWCASTLE` (16 races, class not given) was merged
+  into the thoroughbred Newcastle card. A section's `raceType` now
+  classifies meetings without their own class, and a second meeting with
+  an already-loaded name is skipped with a warning naming both.
+* Runners Betfair has REMOVED but Sportsbet still prices (e.g. `Just In
+  Time`, Randwick R1) are now named in one warning per race instead of
+  being logged as "unmatched"; the two sources disagree, so nothing is
+  overridden.
+
+**Scratchings were being priced (found via the Betfair cross-check, fixed
+with the user's archived payload, 2026-10-03 12:24 AEST).** The exchange
+reported dozens of runners REMOVED that Sportsbet still "priced" (9 of 20
+in Flemington R5); the website confirmed `Just In Time` (Randwick R1) was
+scratched. `scripts/inspect_runner.py` on the archived racecard showed the
+live shape: in the "Win or Place" market the scratched selection has
+`statusCode "S"` while the market stays `"A"`, and its `prices` list still
+carries NTP/NTS entries and a stale live price (26.0). The parser's rule
+("S" only counts when no price is left) therefore kept the runner active at
+$26 with its jockey booked, inflating every overround and leaving stale
+rides (the "ambiguous Brodie Loy" booking) in the model. Now a selection
+"S" inside an open market is a scratching whatever its prices say (a
+market-wide "S" is a suspension, not a scratching), a scratched runner is
+never priced, and a price-code-tagged list yields only the "L" entry.
+Regression tests in `tests/test_sportsbet_scratchings.py` use the real
+shape. 188 tests pass.
+
+Still open, outside the Betfair work: once a race has run its rides lose
+their live price, so the Megabet drops to LOW and is hidden rather than
+being valued conditional on the results so far.
+
+**GitHub Actions verdict (runs 37086687517 / 37086845909, 2026-10-03):**
+
+* The repository has **no** `BETFAIR_APP_KEY`, `BETFAIR_USERNAME` or
+  `BETFAIR_PASSWORD` secrets (the "Secrets present?" step printed NOT SET
+  for all three), so the check stopped at the config step.
+* Without credentials the reachability probe showed that
+  `identitysso.betfair.com`, `identitysso.betfair.com.au` and
+  `api.betfair.com` all answer a GitHub-hosted runner with **HTTP 403 and
+  a Cloudflare block page**, so credentials would not have helped: Betfair
+  refuses GitHub's datacenter IPs, as the 2026-08-22 note already recorded.
+  Sportsbet answers the same runner with its "Location Error" page.
+* The live verdict therefore has to come from the user's own Australian
+  machine: `python -m app.betfair_check` there prints the step that fails
+  and Betfair's own reason. A self-hosted runner in Australia with the
+  three secrets would make the `betfair-check` workflow meaningful.
+
 ## 2026-09-19 — Betfair catalogue fix (ported from drz-scanner)
 
 A live run with real credentials on 2026-09-19 showed `listMarketCatalogue`

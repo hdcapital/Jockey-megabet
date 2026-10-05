@@ -133,6 +133,17 @@ Python 3.11+ required (3.12 recommended).
 4. Optional non-interactive login: generate a client certificate, upload it
    to your Betfair account, set `BETFAIR_CERT_FILE`/`BETFAIR_KEY_FILE`.
 
+5. Check it: `python -m app.betfair_check` logs in, lists today's AU win
+   markets and fetches a few books, printing one `[OK]`/`[FAIL]` line per
+   step with Betfair's own error code and the usual fix when a step is
+   refused. Every scan also prints a `Betfair: connected via … / FAILED — …`
+   line above the tables.
+6. Australian/NZ accounts are held on `identitysso.betfair.com.au`; the
+   scanner tries `identitysso.betfair.com` first and then the AU host, and
+   says which accepted the login (pin it with `BETFAIR_IDENTITY_URL`).
+7. `.env` is read from the project folder regardless of the directory the
+   scanner is launched from.
+
 Without credentials the scanner runs Sportsbet-only and clearly marks the
 Betfair columns unavailable.
 

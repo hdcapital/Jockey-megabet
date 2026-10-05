@@ -35,6 +35,7 @@ from app.sources.betfair import (
     BetfairClient,
     BetfairMarket,
     BetfairNotConfiguredError,
+    BetfairStatus,
 )
 
 log = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ def gather_meeting_races(
         return {}
     meetings_raw, _ = sb.fetch_meetings(for_date)
     races_by_meeting: dict[str, list[RaceInfo]] = {}
+    seen_names: dict[str, str] = {}
     for meeting in meetings_raw:
         name = _first(meeting, "name", "venueName", "meetingName")
         if not isinstance(name, str):
@@ -60,6 +62,20 @@ def gather_meeting_races(
         if not any(venue_names_match(name, w) for w in wanted if w):
             continue
         key = normalize_name(name)
+        cls = _first(meeting, "className", "raceType", "classType") or (
+            "unknown class" if meeting.get("_class_unknown") else "class not given"
+        )
+        if key in seen_names:
+            # Two meeting nodes with one name (another code or another day's
+            # card at the same venue): merging them would hand a jockey
+            # rides from both. Keep the first and say what was dropped.
+            log.warning(
+                "meeting %r (%s, %d races) skipped: a meeting named %r was already "
+                "loaded for this scan", name, cls,
+                len(_first(meeting, "races", "events") or []), seen_names[key],
+            )
+            continue
+        seen_names[key] = name
         race_nodes = _first(meeting, "races", "events") or []
         for rn in race_nodes:
             if not isinstance(rn, dict):
@@ -74,25 +90,31 @@ def gather_meeting_races(
                 continue
             races_by_meeting.setdefault(key, []).extend(card.races)
         log.info(
-            "meeting %s: %d races retrieved", name, len(races_by_meeting.get(key, []))
+            "meeting %s (%s): %d races retrieved", name, cls,
+            len(races_by_meeting.get(key, [])),
         )
     return races_by_meeting
 
 
-def fetch_betfair_markets(for_date: date) -> list[BetfairMarket] | None:
-    """Betfair AU win markets with live books, or None when unavailable."""
+def fetch_betfair_markets(
+    for_date: date,
+) -> tuple[list[BetfairMarket] | None, BetfairStatus]:
+    """Betfair AU win markets with live books (None when unavailable), plus
+    a status record saying exactly what happened, for the scan output."""
     try:
         bf = BetfairClient()
     except BetfairNotConfiguredError as exc:
         log.info("betfair benchmark disabled: %s", exc)
-        return None
+        return None, BetfairStatus(configured=False)
     try:
         markets = bf.list_au_win_markets(for_date)
         bf.fetch_market_books(markets)
-        return markets
+        return markets, bf.status
     except SourceUnavailableError as exc:
         log.error("betfair unavailable: %s", exc)
-        return None
+        bf.status.error = str(exc)
+        bf.status.hint = getattr(exc, "hint", None)
+        return None, bf.status
     finally:
         bf.close()
 
@@ -296,8 +318,9 @@ def run_scan(args: argparse.Namespace) -> int:
             return 2
 
     betfair_markets = None
+    betfair_status: BetfairStatus | None = None
     if args.source in ("all", "betfair"):
-        betfair_markets = fetch_betfair_markets(scan_date)
+        betfair_markets, betfair_status = fetch_betfair_markets(scan_date)
 
     valuations: list[MegabetValuation] = []
     ride_cache: dict = {}
@@ -333,6 +356,8 @@ def run_scan(args: argparse.Namespace) -> int:
         persist_scan(offers, races_by_meeting, valuations, now,
                      challenge_valuations=challenge_valuations)
 
+    if betfair_status is not None:
+        tables.print_betfair_status(betfair_status)
     tables.render_all(valuations, challenge_valuations, now,
                       show_low_quality=args.show_low)
     return 0

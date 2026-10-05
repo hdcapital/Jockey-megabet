@@ -101,8 +101,14 @@ class _HostThrottle:
 class ArchivingClient:
     """httpx wrapper with retries, throttling and raw archival."""
 
-    def __init__(self, source: str, archive: bool | None = None):
-        settings = get_settings()
+    def __init__(
+        self,
+        source: str,
+        archive: bool | None = None,
+        transport: httpx.BaseTransport | None = None,
+        settings: Any = None,
+    ):
+        settings = settings or get_settings()
         self.source = source
         self.archive = settings.archive_raw_responses if archive is None else archive
         self.archive_dir = settings.raw_archive_dir
@@ -115,6 +121,7 @@ class ArchivingClient:
                 "Accept-Language": "en-AU,en;q=0.9",
             },
             follow_redirects=True,
+            transport=transport,  # tests inject a fake server here
         )
         self._retries = settings.http_max_retries
         self._backoff = settings.http_backoff_base_seconds

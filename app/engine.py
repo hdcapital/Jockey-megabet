@@ -102,27 +102,35 @@ def build_ride_probabilities(
     venue: str,
     settings: Settings,
     betfair_markets: list[BetfairMarket] | None = None,
+    match_cache: dict | None = None,
 ) -> list[RideProbability]:
-    """Fair win probability for each of the jockey's active rides."""
+    """Fair win probability for each of the jockey's active rides.
+
+    ``match_cache`` (shared across a scan) holds the Betfair runner matches
+    per race, so a race ridden by several jockeys with Megabets is matched
+    and logged once, not once per jockey.
+    """
     out: list[RideProbability] = []
     weights = {
         "betfair": settings.consensus_weight_betfair,
         "sportsbet": settings.consensus_weight_sportsbet,
     }
     # One Betfair market lookup and one runner match per race, not per ride.
-    matches_by_race: dict[str, list] = {}
+    matches_by_race: dict = match_cache if match_cache is not None else {}
 
     def race_matches(race):
-        if race.source_id not in matches_by_race:
+        key = ("betfair_matches", race.source_id)
+        if key not in matches_by_race:
             found = []
             bf_market = find_betfair_market(venue, race, betfair_markets or [])
             if bf_market is not None:
                 found = match_race_runners(
                     race.active_runners(), bf_market.runners,
                     race_label=f"{venue} R{race.race_number}",
+                    removed_on_betfair=bf_market.removed_names,
                 )
-            matches_by_race[race.source_id] = found
-        return matches_by_race[race.source_id]
+            matches_by_race[key] = found
+        return matches_by_race[key]
 
     for ride in card.rides:
         race, runner = ride.race, ride.runner
@@ -284,7 +292,8 @@ def value_offer(
     else:
         card = find_rides(offer.jockey_name, races)
         rides = build_ride_probabilities(
-            card, offer.meeting_name or "", settings, betfair_markets
+            card, offer.meeting_name or "", settings, betfair_markets,
+            match_cache=ride_cache,
         )
     if ride_cache is not None and cached is None:
         ride_cache[cache_key] = (card, rides)

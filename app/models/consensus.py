@@ -67,7 +67,9 @@ def consensus(
     blended = sum(s.probability * weights[s.source] for s in usable) / total_w  # type: ignore[operator]
     fallback = bool(excluded)
     if fallback:
-        log.info(
+        # One line per ride adds up to hundreds per scan; the valuation's
+        # quality text already says "Betfair missing or weak".
+        log.debug(
             "consensus fell back to %s (excluded: %s)",
             "+".join(s.source for s in usable),
             ", ".join(f"{s.source}: {s.detail or 'unavailable'}" for s in excluded),
