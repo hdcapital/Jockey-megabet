@@ -21,6 +21,7 @@ MENU = """
  │  4  Test my Betfair login                                    │
  │  5  Open the results spreadsheet                             │
  │  6  Open the settings file                                   │
+ │  7  Play the alert sound                                     │
  │  Q  Quit                                                     │
  └──────────────────────────────────────────────────────────────┘
 """
@@ -60,7 +61,7 @@ def main() -> int:
     while True:
         print(MENU)
         try:
-            choice = input(" Choose 1-6 or Q: ").strip().lower()
+            choice = input(" Choose 1-7 or Q: ").strip().lower()
         except (KeyboardInterrupt, EOFError):
             return 0
         if choice == "1":
@@ -83,6 +84,8 @@ def main() -> int:
             if not env.exists() and example.exists():
                 env.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
             _open(env)
+        elif choice == "7":
+            _run("app.value.sound")
         elif choice in ("q", "quit", "exit"):
             return 0
 

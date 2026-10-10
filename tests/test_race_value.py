@@ -390,3 +390,23 @@ def test_places_can_be_switched_off(tmp_path):
     scanner, _, _, _ = make_scanner(tmp_path, value_include_places=False)
     res = scanner.scan_once(NOW)
     assert res.rows and all(r.kind == "WIN" for r in res.rows)
+
+
+@pytest.mark.parametrize("no_sound,expected", [(False, 1), (True, 0)])
+def test_live_chimes_once_when_a_bet_is_confirmed(tmp_path, monkeypatch, no_sound, expected):
+    import argparse
+
+    import app.race_value as rv
+
+    scanner, _, _, cfg = make_scanner(tmp_path, value_confirm_scans=1)
+    real_scan = scanner.scan_once
+    monkeypatch.setattr(scanner, "scan_once", lambda: real_scan(NOW))
+    monkeypatch.setattr(rv, "ValueScanner", lambda *a, **k: scanner)
+    plays = []
+    monkeypatch.setattr(rv.Chime, "play", lambda self: plays.append(1))
+    args = argparse.Namespace(archive=False, interval=60, once=True, all=False, top=10,
+                              no_clear=True, no_sound=no_sound)
+    con = Console(record=True, width=160)
+    assert rv.live(args, cfg, con) == 0
+    assert len(plays) == expected  # two new bets, one chime
+    assert "NEW ▶ BACK" in con.export_text()

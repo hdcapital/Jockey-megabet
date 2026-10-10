@@ -134,6 +134,11 @@ class Settings(BaseSettings):
     # 0 shows the stake as a percentage of your bank instead.
     value_bankroll: float = 0.0
     value_kelly_fraction: float = 0.25
+    # Alert sound: "confirmed" chimes when a bet becomes worth a look,
+    # "watching" also chimes at the first sighting, "off" is silent.
+    # VALUE_SOUND_FILE plays your own .wav instead of the built-in chime.
+    value_sound: str = "confirmed"
+    value_sound_file: str | None = None
 
 
 @lru_cache

@@ -70,6 +70,7 @@ def render(
     recent_results: list[str] | None = None,
     next_at: datetime | None = None,
     show_all: bool = False,
+    new_keys: set[str] | None = None,
     top: int = 25,
     console: Console | None = None,
     clear: bool = False,
@@ -110,6 +111,7 @@ def render(
         what = "to WIN" if r.kind == "WIN" else f"to PLACE (top {r.places})"
         horse = f"{r.horse} (#{r.saddlecloth})" if r.saddlecloth else r.horse
         line = Text.assemble(
+            ("NEW ", "bold black on yellow") if new_keys and r.key in new_keys else "",
             ("▶ BACK  ", "bold"), (horse, "bold cyan"), (f"  {what}", "bold"),
             (f"   {r.venue} R{r.race_number} · jumps {jump_text(r, now)}", ""),
         )

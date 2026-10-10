@@ -151,3 +151,34 @@ def test_sportsbet_place_price_and_terms_are_parsed():
     by = {r.horse_name: r for r in race.runners}
     assert by["Fast Fixture"].place_odds == 1.3
     assert by["Scratchy Example"].place_odds is None  # scratched: never priced
+
+
+# -- alert sound ------------------------------------------------------------------
+
+def test_tracker_reports_what_is_new_in_each_scan(tmp_path):
+    t = tracker(tmp_path)
+    t.observe([row()], [], NOW)
+    assert t.new_signals == ["WIN:1.1:1"] and t.new_confirmations == []
+    t.observe([row()], [], NOW + timedelta(minutes=1))
+    assert t.new_signals == [] and t.new_confirmations == ["WIN:1.1:1"]
+    t.observe([row()], [], NOW + timedelta(minutes=2))
+    assert t.new_confirmations == []  # chimes once per bet, not every scan
+
+
+def test_chime_is_a_short_valid_wav(tmp_path):
+    import wave
+    from app.value.sound import synthesise
+
+    with wave.open(str(synthesise(tmp_path / "c.wav"))) as w:
+        assert w.getnchannels() == 1 and w.getsampwidth() == 2
+        assert 0.3 < w.getnframes() / w.getframerate() < 1.0
+
+
+def test_chime_falls_back_to_the_terminal_bell(tmp_path, monkeypatch, capsys):
+    from app.value import sound
+
+    monkeypatch.setattr(sound.sys, "platform", "linux")
+    monkeypatch.setattr(sound.shutil, "which", lambda _: None)
+    sound.Chime(tmp_path).play()
+    assert capsys.readouterr().out == "\a"
+    assert (tmp_path / "chime.wav").exists()

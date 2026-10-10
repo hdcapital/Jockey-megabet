@@ -132,6 +132,9 @@ class Tracker:
         self.signals: dict[str, Signal] = {}
         self.markets: dict[str, TrackedMarket] = {}
         self.settled_today: list[dict[str, Any]] = []
+        # Keys first seen / first confirmed by the latest observe() call.
+        self.new_signals: list[str] = []
+        self.new_confirmations: list[str] = []
         self._load()
 
     # -- persistence -------------------------------------------------------
@@ -173,6 +176,7 @@ class Tracker:
         if self.streaks_at is None or now - self.streaks_at > self.STREAK_EXPIRY:
             self.streaks = {}
         need = self.settings.value_confirm_scans
+        self.new_signals, self.new_confirmations = [], []
         new: dict[str, int] = {}
         for r in rows:
             if not self.qualifies(r):
@@ -188,9 +192,11 @@ class Tracker:
                     market_id=r.market_id, selection_id=r.selection_id, places=r.places,
                     first_seen=_iso(now), first_odds=r.sb_odds, first_ev=r.ev, first_p=r.p_fair,
                 )
+                self.new_signals.append(r.key)
             if r.streak >= need and sig.confirmed_at is None:
                 sig.confirmed_at = _iso(now)
                 sig.confirmed_odds, sig.confirmed_ev, sig.confirmed_p = r.sb_odds, r.ev, r.p_fair
+                self.new_confirmations.append(r.key)
             if r.market_id not in self.markets:
                 self.markets[r.market_id] = TrackedMarket(
                     market_id=r.market_id, kind=r.kind, venue=r.venue,

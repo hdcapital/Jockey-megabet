@@ -46,6 +46,7 @@ It never places a bet. You decide.
 | 4 | Test your Betfair login |
 | 5 | Open the results spreadsheet (every flagged bet and how it went) |
 | 6 | Open the settings file |
+| 7 | Play the alert sound |
 
 ## Reading the screen
 
@@ -65,6 +66,12 @@ It never places a bet. You decide.
   Betfair straight away guarantees a profit.
 * **to PLACE (top 2)**: a place bet, which pays if the horse runs in the top
   2 (or top 3 in fields of 8 or more).
+
+When a horse becomes a bet worth a look you hear a short **chime** (once
+per bet) and it's tagged **NEW** on screen. Change it with `VALUE_SOUND`:
+`confirmed` (default), `watching` (also chime the first time a horse shows
+value) or `off`. You can also point `VALUE_SOUND_FILE` at your own .wav,
+or start with `--no-sound`.
 
 **Watching** lists horses showing value for the first time. They're
 confirmed if the value is still there one scan later. A gap that shows up
@@ -111,6 +118,7 @@ most likely to change:
 | `VALUE_WINDOW_MINUTES` | 20 | How far ahead to look |
 | `VALUE_INCLUDE_PLACES` | true | Compare place prices too |
 | `BETFAIR_COMMISSION` | 0.08 | Your Betfair commission (lock-in column only) |
+| `VALUE_SOUND` | confirmed | Chime for new bets: confirmed / watching / off |
 
 ## If something goes wrong
 

@@ -248,6 +248,11 @@ bet):
 * `DELAYED`: a delayed application key.
 * `SUSPECT`: edge above 30%.
 
+**Alert:** a short synthesised chime (`data/chime.wav`; `winsound` on
+Windows, `afplay` on a Mac) plays once per scan when a bet is newly
+confirmed. Configure it with `VALUE_SOUND` (`confirmed` | `watching` | `off`),
+`VALUE_SOUND_FILE` or `--no-sound`.
+
 **Confirmation:** a row is a *bet worth a look* only after an edge of at
 least `VALUE_MIN_EV` (2%) on `VALUE_CONFIRM_SCANS` (2) scans in a row.
 

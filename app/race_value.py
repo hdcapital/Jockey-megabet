@@ -64,6 +64,7 @@ from app.sources.betfair import BetfairNotConfiguredError
 from app.value.display import render
 from app.value.report import render_report, results_line
 from app.value.scanner import SYDNEY, ScanResult, ValueScanner
+from app.value.sound import Chime
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +112,8 @@ def live(args: argparse.Namespace, settings, console: Console) -> int:
         )
         return 2
     interval = timedelta(seconds=args.interval or settings.value_interval_seconds)
+    sound = "off" if args.no_sound else (settings.value_sound or "off").strip().lower()
+    chime = Chime(DATA, settings.value_sound_file)
     tick = 1.0  # countdown refresh; Betfair polls are rate-limited inside between_scans
     recent: deque[str] = deque(maxlen=5)  # results settled since the screen last cleared
     try:
@@ -122,13 +125,18 @@ def live(args: argparse.Namespace, settings, console: Console) -> int:
                 result = ScanResult(at=datetime.now(timezone.utc),
                                     error=f"Unexpected problem: {exc}")
             next_at = result.at + interval
+            fresh = set(scanner.tracker.new_confirmations) if result.error is None else set()
+            alert = fresh or (sound == "watching" and result.error is None
+                              and scanner.tracker.new_signals)
+            if alert and sound in ("confirmed", "watching"):
+                chime.play()  # once per scan, however many new bets
             render(
                 result, settings,
                 pending=scanner.tracker.pending_count(),
                 results_line=results_line(RESULTS_PATH, result.at),
                 recent_results=list(recent),
                 next_at=None if args.once else next_at,
-                show_all=args.all, top=args.top, console=console,
+                show_all=args.all, top=args.top, console=console, new_keys=fresh,
                 clear=not (args.once or args.no_clear),
             )
             if args.once:
@@ -169,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-places", action="store_true", help="win markets only")
     parser.add_argument("--top", type=int, default=25, help="rows in the detail table")
     parser.add_argument("--no-clear", action="store_true", help="don't clear the screen")
+    parser.add_argument("--no-sound", action="store_true", help="no chime for new bets")
     parser.add_argument("--archive", action="store_true",
                         help="archive raw responses (off by default: ~20 files a minute)")
     parser.add_argument("-v", "--verbose", action="store_true", help="debug detail in the log")
