@@ -25,11 +25,15 @@ It never places a bet. You decide.
    * No Python yet? It opens the download page. Install it, ticking
      **"Add python.exe to PATH"**, then double-click START.bat again.
    * The first run installs what it needs (about a minute).
-3. The first time, it asks for your Betfair **application key**, **username**
+3. **Already have a `.env` with your Betfair details** (as in your other
+   projects)? Copy it into this folder, next to START.bat. It's used as is
+   and step 4 is skipped. It needs `BETFAIR_APP_KEY`, `BETFAIR_USERNAME` and
+   `BETFAIR_PASSWORD`.
+4. Otherwise, the first time it asks for your Betfair **application key**, **username**
    and **password**, plus (optionally) your betting bank and commission rate.
    It tests the login straight away and tells you plainly if something's
    wrong.
-4. Choose **1** from the menu. Leave the window open; it updates every
+5. Choose **1** from the menu. Leave the window open; it updates every
    minute. Press **Ctrl+C** to stop.
 
 ## The menu
