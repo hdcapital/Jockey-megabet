@@ -6,14 +6,22 @@ fixed-odds win bet, and if it runs **2nd or 3rd** your stake comes back as a
 that offer, using the same probabilities as the place scanner, and picks the
 one to back.
 
+**Easiest:** double-click **`BONUS BACK.bat`** (Windows). It asks your
+stake, then the meeting and race by number, shows the horse to back, and
+opens a page with every runner's numbers. No options to remember. See
+`START HERE.txt`.
+
+From a command line, the same thing with options:
+
 ```
+python -m app.bonusback_scan                 # the menu
 python -m app.bonusback_scan --promo "Randwick:7" --promo "Flemington:4"
 python -m app.bonusback_scan --meeting Randwick --race 7
 python -m app.bonusback_scan --all --objective lock --bonus-value 0.75
 ```
 
-Windows: `bonusback.bat --promo "Randwick:7"`. Sportsbet's API carries no
-promotion flag, so you name the races. Nothing here places a bet.
+Sportsbet's API carries no promotion flag, so you choose the races.
+Nothing here places a bet.
 
 ## The maths
 

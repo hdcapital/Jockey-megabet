@@ -241,3 +241,63 @@ def test_p23_calibrated_out_of_sample(calibration):
     for row in calibration_rows(pr, "price"):
         if 3 <= row["lo"] and row["hi"] <= 51:
             assert abs(row["actual"] / row["predicted"] - 1) < 0.06, row
+
+
+class _FakeSportsbet:
+    def __init__(self):
+        now = datetime.now(timezone.utc)
+        from app.sources.base import RaceStub
+
+        self.stubs = [
+            RaceStub(event_id=f"E{n}", race_number=n, start_time=now + timedelta(minutes=10 * n),
+                     name=None, status_code="A", betting_status=None, meeting_id="M",
+                     meeting_name="Randwick", class_name="Horses - Aus/NZ")
+            for n in (6, 7)
+        ]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        pass
+
+    def fetch_schedule(self, for_date):
+        return [], self.stubs, None
+
+    def fetch_racecard(self, event_id):
+        race = _race(PRICES)
+        race.source_id = event_id
+        race.race_number = int(event_id[1:])
+        return race
+
+
+def test_menu_runs_without_typing_any_options(tmp_path, monkeypatch):
+    from app import bonusback_menu as menu
+
+    monkeypatch.setattr(menu, "PREFS_PATH", tmp_path / "prefs.json")
+    monkeypatch.setattr(menu, "REPORT_PATH", tmp_path / "bonusback.html")
+    monkeypatch.setattr("app.bonusback_scan.open_betfair", lambda *a, **k: None)
+    answers = iter(["25", "1", "2", "q"])   # stake, meeting, race 7, quit
+    opened = []
+    assert menu.run_menu(ask=lambda _p: next(answers), sb_factory=_FakeSportsbet,
+                         open_browser=opened.append) == 0
+    page = (tmp_path / "bonusback.html").read_text()
+    assert "Randwick Race 7" in page and "$25" in page
+    assert opened and menu.load_stake(50) == 25.0
+
+    # Enter at the race prompt means every race at the meeting; Enter at the
+    # stake prompt keeps the remembered amount.
+    answers = iter(["", "1", "", "q"])
+    assert menu.run_menu(ask=lambda _p: next(answers), sb_factory=_FakeSportsbet,
+                         open_browser=lambda u: None) == 0
+    page = (tmp_path / "bonusback.html").read_text()
+    assert "Race 6" in page and "Race 7" in page and "$25" in page
+
+
+def test_menu_shrugs_off_bad_input():
+    from app.bonusback_menu import _choose, parse_money
+
+    assert parse_money("$50") == 50.0 and parse_money("abc") is None
+    assert _choose("", 3, lambda p: "9") is None
+    assert _choose("", 3, lambda p: "Q") == "q"
+    assert _choose("", 3, lambda p: "2") == 2

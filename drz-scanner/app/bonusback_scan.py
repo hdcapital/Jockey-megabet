@@ -229,10 +229,60 @@ def to_json(pr: PromoRace) -> dict:
     }
 
 
+def value_stubs(sb, bf, chosen, calibration, settings, terms, objective,
+                show=None) -> tuple[list[PromoRace], list[str]]:
+    """Fetch and value each chosen race. ``show`` is called on each result."""
+    results: list[PromoRace] = []
+    problems: list[str] = []
+    if bf is not None:
+        bf.refresh()
+    for st in chosen:
+        try:
+            race = sb.fetch_racecard(st.event_id)
+        except (SourceUnavailableError, SchemaMismatchError) as exc:
+            problems.append(f"{st.meeting_name} R{st.race_number}: couldn't load the race ({exc})")
+            continue
+        race.venue = race.venue or st.meeting_name
+        race.race_number = race.race_number or st.race_number
+        race.start_time = race.start_time or st.start_time
+        if race.status != "open":
+            problems.append(f"{race.venue} R{race.race_number}: betting has closed")
+            continue
+        ex, delayed, winners = exchange_inputs(bf, race, datetime.now(timezone.utc))
+        try:
+            pr = value_promo_race(
+                race, calibration, settings, terms, objective,
+                exchange=ex, betfair_delayed=delayed, place_market_winners=winners,
+            )
+        except PromoRaceError as exc:
+            problems.append(str(exc))
+            continue
+        results.append(pr)
+        if show is not None:
+            show(pr)
+    return results, problems
+
+
+def open_betfair(for_date, settings, quiet: bool = False):
+    bf = BetfairSession(for_date, settings)
+    if not bf.configured:
+        if not quiet:
+            console.print(f"[yellow]Betfair unavailable:[/yellow] {bf.reason_unavailable}. "
+                          f"Sportsbet de-vig probabilities only; no hedges.")
+        return None
+    return bf
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if not argv:
+        from app.bonusback_menu import run_menu
+
+        return run_menu()
     args = build_parser().parse_args(argv)
     if not (args.all or args.promo or args.meeting):
-        console.print("Name the promo races: --promo VENUE:RACE (repeatable), --meeting, or --all.")
+        console.print("Name the promo races: --promo VENUE:RACE (repeatable), --meeting, or --all. "
+                      "Or run with no options for the menu.")
         return 2
     setup_logging(logging.DEBUG if args.verbose else logging.WARNING)
     settings = get_settings()
@@ -242,15 +292,10 @@ def main(argv: list[str] | None = None) -> int:
         commission=args.commission, min_ev=args.min_ev,
     )
     for_date = args.date or racing_today()
-    bf = None if args.no_betfair else BetfairSession(for_date, settings)
-    if bf is not None and not bf.configured:
-        console.print(f"[yellow]Betfair unavailable:[/yellow] {bf.reason_unavailable}. "
-                      f"Sportsbet de-vig probabilities only; no hedges.")
-        bf = None
+    bf = None if args.no_betfair else open_betfair(for_date, settings)
 
     from app.sources.sportsbet import SportsbetClient
 
-    results: list[PromoRace] = []
     try:
         with SportsbetClient() as sb:
             _m, stubs, _raw = sb.fetch_schedule(for_date)
@@ -258,30 +303,12 @@ def main(argv: list[str] | None = None) -> int:
             if not chosen:
                 console.print("No open race matches the promo races given.")
                 return 1
-            if bf is not None:
-                bf.refresh()
-            for st in chosen:
-                try:
-                    race = sb.fetch_racecard(st.event_id)
-                except (SourceUnavailableError, SchemaMismatchError) as exc:
-                    console.print(f"[red]{st.meeting_name} R{st.race_number}: {exc}[/red]")
-                    continue
-                race.venue = race.venue or st.meeting_name
-                race.race_number = race.race_number or st.race_number
-                race.start_time = race.start_time or st.start_time
-                if race.status != "open":
-                    continue
-                ex, delayed, winners = exchange_inputs(bf, race, datetime.now(timezone.utc))
-                try:
-                    pr = value_promo_race(
-                        race, calibration, settings, terms, args.objective,
-                        exchange=ex, betfair_delayed=delayed, place_market_winners=winners,
-                    )
-                except PromoRaceError as exc:
-                    console.print(f"[yellow]{exc}[/yellow]")
-                    continue
-                results.append(pr)
-                render(pr, terms, args.objective)
+            results, problems = value_stubs(
+                sb, bf, chosen, calibration, settings, terms, args.objective,
+                show=lambda pr: render(pr, terms, args.objective),
+            )
+            for msg in problems:
+                console.print(f"[yellow]{msg}[/yellow]")
     except (SourceUnavailableError, SchemaMismatchError) as exc:
         console.print(f"[bold red]Sportsbet unavailable:[/bold red] {exc}")
         return 2
