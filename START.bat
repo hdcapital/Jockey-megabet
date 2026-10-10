@@ -1,6 +1,6 @@
 @echo off
-title Race Value Scanner - live
-rem Double-click: straight into the live scanner (START.bat has the full menu).
+title Race Value Scanner
+rem Double-click me. Everything (live scanner, results, Betfair setup) is in the menu.
 cd /d "%~dp0"
 where py >nul 2>nul
 if errorlevel 1 goto nopython
@@ -46,5 +46,4 @@ pause
 exit /b 1
 
 :run
-py -m app.race_value %*
-pause
+py -m app.menu

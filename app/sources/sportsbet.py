@@ -136,6 +136,35 @@ def _extract_price(node: dict[str, Any]) -> float | None:
     return None
 
 
+#: Field names for the fixed place price inside a live (``L``) price entry;
+#: ``placePrice`` is live-verified (drz-scanner, 2026-09-19).
+_PLACE_PRICE_KEYS = ("placePrice", "placePriceDecimal", "returnPlace", "placeOdds")
+
+
+def _extract_place_price(node: dict[str, Any]) -> float | None:
+    """The LIVE fixed place price of a selection, or None.
+
+    Only the ``L`` entry of a tagged ``prices`` list (or an untagged entry
+    when nothing is tagged) is read, for the same reason as win prices.
+    """
+    prices = node.get("prices")
+    if not isinstance(prices, list):
+        return None
+    entries = [p for p in prices if isinstance(p, dict)]
+    tagged = any("priceCode" in p for p in entries)
+    for p in entries:
+        code = p.get("priceCode")
+        if (tagged and code != "L") or (not tagged and code is not None):
+            continue
+        for key in _PLACE_PRICE_KEYS:
+            v = p.get(key)
+            if isinstance(v, dict):
+                v = _first(v, "decimal", "decimalPrice", "price")
+            if isinstance(v, (int, float)) and v > 1.0:
+                return float(v)
+    return None
+
+
 _SCRATCH_WORDS = ("scratched", "latescratched", "late_scratched", "removed")
 
 
@@ -735,6 +764,7 @@ class SportsbetClient:
         seen_names: set[str] = set()
         win_market = _find_win_market(payload)
         win_market_code = ""
+        num_places = win_market.get("numPlaces") if win_market is not None else None
         if win_market is not None:
             candidate_nodes: list[dict[str, Any]] = [
                 s for s in win_market.get("selections", []) if isinstance(s, dict)
@@ -767,6 +797,7 @@ class SportsbetClient:
                 trainer = _first(trainer, "name", "fullName")
             saddle = _first(node, "runnerNumber", "saddlecloth", "number", "barrierNumber")
             price = _extract_price(node)
+            place_price = _extract_place_price(node) if in_win_market else None
             rstatus = _runner_status(node)
             # Live schema (verified 2026-10-03 against a scratched runner,
             # "Just In Time", Randwick R1): a scratching flips the selection's
@@ -781,7 +812,7 @@ class SportsbetClient:
                 if win_market_code != "S" or price is None:
                     rstatus = "scratched"
             if rstatus == "scratched":
-                price = None  # a scratched runner has no win price
+                price = place_price = None  # a scratched runner has no price
             runners.append(
                 RunnerInfo(
                     source=SOURCE,
@@ -793,6 +824,7 @@ class SportsbetClient:
                     status=rstatus,
                     win_odds=price,
                     odds_timestamp=fetched_at if price else None,
+                    place_odds=place_price,
                 )
             )
             place = _first(node, "finishPlace", "placeNumber", "result", "finishingPosition")
@@ -828,5 +860,6 @@ class SportsbetClient:
             runners=runners,
             winner_names=winners,
             win_market_status=win_market_code or None,
+            places=int(num_places) if isinstance(num_places, (int, float)) else None,
         )
         return RacecardInfo(meeting=meeting, races=[race], fetched_at=fetched_at)

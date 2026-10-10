@@ -199,43 +199,67 @@ exponential backoff. A GitHub Actions workflow
 
 ## 9a. Race value scanner (Sportsbet vs Betfair, next 20 minutes)
 
+**Plain-English guide: [RACE-VALUE-GUIDE.md](RACE-VALUE-GUIDE.md).**
+Double-click **START.bat** (Mac: `start.command`) for a menu covering setup,
+the live scanner and the results report.
+
 ```bash
-python -m app.race_value            # every 60s; or double-click value-loop.bat
+python -m app.race_value            # live, every 60s
 python -m app.race_value --once     # one pass
-python -m app.race_value --all --min-ev 0.02 --window 30
+python -m app.race_value --report   # are the edges real?
+python -m app.race_value --all --no-places --window 30
+python -m app.setup_wizard          # enter / test the Betfair login
 ```
 
 Every minute: the thoroughbred races jumping in the next
-`VALUE_WINDOW_MINUTES` that have both a Sportsbet racecard and a Betfair
-WIN market; every runner's Sportsbet fixed win price is compared with the
-exchange's probability and the table is sorted by EV. **Betfair is
-required** here (it is the source of truth) and logs in once per run, not
-once a minute.
+`VALUE_WINDOW_MINUTES` that have a Sportsbet racecard and a Betfair market.
+Each runner's Sportsbet fixed **win** and **place** price is compared with
+the exchange (the source of truth), sorted by edge (EV). Betfair logs in
+once per run; after a refused login it waits 10 minutes.
 
-Adjustments that make the two comparable:
+Making the prices comparable:
 
-* Betfair probability = midpoint of best back and best lay **in probability
-  space**, `(1/back + 1/lay)/2`, then the race's book is **normalised to
-  100%** so the spread is gone and only the market's view is left.
-* The **field is reconciled**: a runner Sportsbet has scratched but the
-  exchange still lists is removed from the Betfair book before normalising
-  (`RENORM` flag); a runner the exchange removed but Sportsbet still prices
-  is reported and not valued.
-* Sportsbet's price is **not de-vigged**: it is the price you are paid. Its
-  overround is shown (`SB ovr`).
-* **Commission** is not part of the fair probability; it only enters the
-  `Lock` column (back Sportsbet, lay Betfair at the best lay,
-  `BETFAIR_COMMISSION` on the lay winnings).
-* **In-play** exchange markets and **suspended** Sportsbet markets are never
-  compared; the gap between the two snapshots is checked (`GAP`).
+* **Betfair price from depth.** For each runner, take the average back and
+  lay odds for a $100 test stake (`VALUE_DEPTH_STAKE`) over the three
+  visible levels. Their midpoint in probability space,
+  `(1/back + 1/lay)/2`, is the raw probability. The market is then scaled to
+  sum to 1 (win) or to the number of places (place), which removes the
+  spread.
+* **Same field.** A Sportsbet scratching still listed on Betfair is taken
+  out of Betfair's market before scaling (`RENORM`). A runner Betfair
+  removed but Sportsbet still prices is reported, not valued.
+* **Places only on matching terms.** Sportsbet's `numPlaces` must equal the
+  Betfair place market's `numberOfWinners`. Exactly 8 runners is flagged
+  `8 RUNNERS`, because one scratching changes the terms.
+* Sportsbet's price is **not de-vigged**: it's what you're paid.
+  **Commission** only enters the lock-in column. In-play and suspended
+  markets are never compared.
 
-Columns: `EV = p_fair × SB − 1`; `EV@lay = SB / best_lay − 1` (conservative
-floor); `Lock` = profit per $1 of an immediate back/lay hedge; `Kelly` =
-full-Kelly fraction (display only). Rows failing a gate (`SPREAD` > 10%,
-`THIN` < $2,000 matched, `BOOK` midpoint book off 100% by > 5%,
-`ONE-SIDED`, `DELAYED` key, `SUSPECT` EV > 30%) are hidden unless `--all`.
-Every compared runner is appended to `data/value_log/<date>.csv` so the
-calls can be checked against results and closing prices later.
+Trust gates (a row failing one is hidden unless `--all` and never becomes a
+bet):
+
+* `SPREAD`: back and lay more than `VALUE_MAX_SPREAD_TICKS` (3) Betfair
+  **price steps** apart. The rule is in ladder ticks, not percent, so
+  favourites and longshots are treated alike.
+* `THIN`: less matched than $2,000 (win) or $500 (place).
+* `SHALLOW`: not enough money at the top of the book for the test stake.
+* `ONE-SIDED`: only a back or only a lay price.
+* `BOOK`: midpoints more than 5% off the sum they should have.
+* `DELAYED`: a delayed application key.
+* `SUSPECT`: edge above 30%.
+
+**Confirmation:** a row is a *bet worth a look* only after an edge of at
+least `VALUE_MIN_EV` (2%) on `VALUE_CONFIRM_SCANS` (2) scans in a row.
+
+**Closing line and results.** Each signal's market is followed to the jump.
+It's polled every `VALUE_CLOSE_POLL_SECONDS` in the last 90 seconds. The
+last fair probability before Betfair goes in-play is the close. After the
+race, Betfair's runner status (WINNER / LOSER / REMOVED) and Starting Price
+settle it. Rows go to `data/value_results.csv`; pending state is kept in
+`data/value_state.json`, so a restart loses nothing. `--report` reads the
+CSV and says, in plain English, whether the flagged prices beat Betfair's
+close and BSP, alongside flat-stake profit, split by confirmed/all,
+win/place and edge size.
 
 ## 10. Run tests
 

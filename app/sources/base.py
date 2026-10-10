@@ -48,6 +48,7 @@ class RunnerInfo:
     status: str = "active"  # active | scratched | unknown
     win_odds: float | None = None
     odds_timestamp: datetime | None = None
+    place_odds: float | None = None  # fixed place price, when offered
 
 
 @dataclass
@@ -64,6 +65,8 @@ class RaceInfo:
     # suspended), when the source gives one. A suspended market's prices
     # cannot be bet, whatever the race status says.
     win_market_status: str | None = None
+    # Place dividends Sportsbet pays on this race ("numPlaces"), if given.
+    places: int | None = None
 
     def active_runners(self) -> list[RunnerInfo]:
         return [r for r in self.runners if r.status == "active"]

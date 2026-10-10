@@ -196,6 +196,9 @@ class BetfairRunnerQuote:
     reliable: bool = False
     detail: str = ""
     cloth_number: int | None = None  # parsed from "7. Zoustar", None if absent
+    # Full visible depth (best first), as (price, size in backer's stake).
+    back_ladder: list[tuple[float, float]] = field(default_factory=list)
+    lay_ladder: list[tuple[float, float]] = field(default_factory=list)
 
 
 @dataclass
@@ -212,6 +215,13 @@ class BetfairMarket:
     # Sportsbet runner that is still active can be reported as such.
     removed_names: list[str] = field(default_factory=list)
     inplay: bool = False  # the race is running; prices are in-running
+    market_type: str = "WIN"  # WIN | PLACE
+    event_id: str | None = None  # Betfair event (one meeting on one day)
+    number_of_winners: int | None = None  # 1 for WIN; 2 or 3 for PLACE
+    # Every runner's book status (ACTIVE, REMOVED, WINNER, LOSER, PLACED)
+    # and Betfair Starting Price once reconciled, by selection id.
+    runner_status: dict[int, str] = field(default_factory=dict)
+    actual_sp: dict[int, float] = field(default_factory=dict)
     total_matched: float | None = None  # market's matched volume (AUD)
     fetched_at: datetime | None = None  # when the book was retrieved
 
@@ -495,10 +505,45 @@ class BetfairClient:
         countries: tuple[str, ...] = ("AU",),
     ) -> list[BetfairMarket]:
         """Thoroughbred WIN markets in ``countries`` starting in the window."""
-        import re as _re
+        return self.list_markets(window_from, window_to, countries, ("WIN",))
 
+    def list_markets(
+        self,
+        window_from: datetime,
+        window_to: datetime,
+        countries: tuple[str, ...] = ("AU",),
+        market_types: tuple[str, ...] = ("WIN",),
+    ) -> list[BetfairMarket]:
+        """Thoroughbred markets of ``market_types`` starting in the window.
+
+        Each market carries its type and event id: Australian place markets
+        are named "To Be Placed" with no race number, so a place market is
+        paired with its win market by event and start time instead. Types are
+        requested one at a time, so a market's type is known, not guessed
+        from its name.
+        """
         markets: list[BetfairMarket] = []
         seen: set[str] = set()
+        for mtype in market_types:
+            self._list_markets_of_type(window_from, window_to, countries, mtype, markets, seen)
+        self.status.catalogue_markets = len(markets)
+        log.info(
+            "betfair: %d %s %s markets in catalogue",
+            len(markets), "/".join(countries), "+".join(market_types),
+        )
+        return markets
+
+    def _list_markets_of_type(
+        self,
+        window_from: datetime,
+        window_to: datetime,
+        countries: tuple[str, ...],
+        mtype: str,
+        markets: list[BetfairMarket],
+        seen: set[str],
+    ) -> None:
+        import re as _re
+
         cursor = window_from
         while cursor < window_to:
             chunk_to = min(cursor + timedelta(hours=self.CATALOGUE_WINDOW_HOURS), window_to)
@@ -508,7 +553,7 @@ class BetfairClient:
                     "filter": {
                         "eventTypeIds": ["7"],  # horse racing
                         "marketCountries": list(countries),
-                        "marketTypeCodes": ["WIN"],
+                        "marketTypeCodes": [mtype],
                         "marketStartTime": {
                             "from": cursor.isoformat(),
                             "to": chunk_to.isoformat(),
@@ -543,6 +588,8 @@ class BetfairClient:
                     venue=event.get("venue") or event.get("name"),
                     market_start=start_dt,
                     race_number=int(mm.group(1)) if mm else None,
+                    market_type=mtype,
+                    event_id=str(event["id"]) if event.get("id") is not None else None,
                 )
                 bm._catalogue_runners = {  # type: ignore[attr-defined]
                     r["selectionId"]: r.get("runnerName", "")
@@ -550,11 +597,42 @@ class BetfairClient:
                 }
                 markets.append(bm)
             cursor = chunk_to
-        self.status.catalogue_markets = len(markets)
-        log.info(
-            "betfair: %d %s win markets in catalogue", len(markets), "/".join(countries)
-        )
-        return markets
+
+    #: listMarketBook data weight per market for each price projection; a
+    #: request must stay at or under 200 in total.
+    PRICE_WEIGHTS = {"EX_BEST_OFFERS": 5, "SP_AVAILABLE": 3, "SP_TRADED": 7,
+                     "EX_TRADED": 17, "EX_ALL_OFFERS": 17}
+
+    def _books(self, market_ids: list[str], price_data: list[str]) -> dict[str, dict[str, Any]]:
+        weight = max(1, sum(self.PRICE_WEIGHTS.get(p, 5) for p in price_data))
+        size = max(1, min(25, 200 // weight))
+        out: dict[str, dict[str, Any]] = {}
+        for i in range(0, len(market_ids), size):
+            books = self._rpc(
+                "listMarketBook",
+                {"marketIds": market_ids[i : i + size],
+                 "priceProjection": {"priceData": price_data}},
+            ) or []
+            for b in books:
+                out[b["marketId"]] = b
+        return out
+
+    def fetch_results(self, markets: list[BetfairMarket]) -> None:
+        """Book status, every runner's status (WINNER/LOSER/PLACED/REMOVED)
+        and Betfair Starting Price, for markets that have jumped."""
+        books = self._books([m.market_id for m in markets], ["SP_AVAILABLE", "SP_TRADED"])
+        for market in markets:
+            book = books.get(market.market_id)
+            if not book:
+                continue
+            market.book_status = book.get("status", market.book_status)
+            market.inplay = bool(book.get("inplay"))
+            for r in book.get("runners", []) or []:
+                sid = r["selectionId"]
+                market.runner_status[sid] = str(r.get("status") or "")
+                sp = (r.get("sp") or {}).get("actualSP")
+                if isinstance(sp, (int, float)) and 1.0 < sp < 1e6:
+                    market.actual_sp[sid] = float(sp)
 
     def fetch_market_books(self, markets: list[BetfairMarket]) -> None:
         """Populate runner quotes with live best back/lay via listMarketBook.
@@ -565,18 +643,7 @@ class BetfairClient:
         """
         s = self.settings
         fetched_at = datetime.now(timezone.utc)
-        books_by_id: dict[str, dict[str, Any]] = {}
-        for i in range(0, len(markets), 25):  # API weight limits
-            chunk = markets[i : i + 25]
-            books = self._rpc(
-                "listMarketBook",
-                {
-                    "marketIds": [m.market_id for m in chunk],
-                    "priceProjection": {"priceData": ["EX_BEST_OFFERS"]},
-                },
-            ) or []
-            for b in books:
-                books_by_id[b["marketId"]] = b
+        books_by_id = self._books([m.market_id for m in markets], ["EX_BEST_OFFERS"])
 
         forced = (s.betfair_key_delayed or "auto").strip().lower()
         if forced in ("true", "1", "yes"):
@@ -616,6 +683,11 @@ class BetfairClient:
             market.total_matched = book.get("totalMatched")
             market.fetched_at = fetched_at
             market.runners = []  # a re-fetched book replaces the old quotes
+            if isinstance(book.get("numberOfWinners"), (int, float)):
+                market.number_of_winners = int(book["numberOfWinners"])
+            market.runner_status = {
+                r["selectionId"]: str(r.get("status") or "") for r in book.get("runners", [])
+            }
             names = getattr(market, "_catalogue_runners", {})
             active = [r for r in book.get("runners", []) if r.get("status") in (None, "ACTIVE")]
             market.removed_names = [
@@ -672,6 +744,10 @@ class BetfairClient:
                         reliable=reliable,
                         detail=detail,
                         cloth_number=cloth,
+                        back_ladder=[(float(x["price"]), float(x["size"])) for x in backs
+                                     if "price" in x and "size" in x],
+                        lay_ladder=[(float(x["price"]), float(x["size"])) for x in lays
+                                    if "price" in x and "size" in x],
                     )
                 )
         if missing:
