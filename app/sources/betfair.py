@@ -211,6 +211,9 @@ class BetfairMarket:
     # Runners the exchange has REMOVED (scratched), by catalogue name, so a
     # Sportsbet runner that is still active can be reported as such.
     removed_names: list[str] = field(default_factory=list)
+    inplay: bool = False  # the race is running; prices are in-running
+    total_matched: float | None = None  # market's matched volume (AUD)
+    fetched_at: datetime | None = None  # when the book was retrieved
 
 
 def derive_probability(
@@ -473,11 +476,27 @@ class BetfairClient:
 
     def list_au_win_markets(self, for_date: date) -> list[BetfairMarket]:
         """Australian thoroughbred WIN markets starting on the given date."""
+        start = datetime.combine(for_date, datetime.min.time(), tzinfo=timezone.utc)
+        markets = self.list_win_markets(
+            start - timedelta(hours=14), start + timedelta(hours=38)
+        )
+        if not markets:
+            log.warning(
+                "betfair: the catalogue has no Australian WIN markets starting "
+                "within 14h before / 38h after %s UTC — nothing for the exchange "
+                "to price (wrong --date, or no AU racing in that span)", for_date,
+            )
+        return markets
+
+    def list_win_markets(
+        self,
+        window_from: datetime,
+        window_to: datetime,
+        countries: tuple[str, ...] = ("AU",),
+    ) -> list[BetfairMarket]:
+        """Thoroughbred WIN markets in ``countries`` starting in the window."""
         import re as _re
 
-        start = datetime.combine(for_date, datetime.min.time(), tzinfo=timezone.utc)
-        window_from = start - timedelta(hours=14)
-        window_to = start + timedelta(hours=38)
         markets: list[BetfairMarket] = []
         seen: set[str] = set()
         cursor = window_from
@@ -488,7 +507,7 @@ class BetfairClient:
                 {
                     "filter": {
                         "eventTypeIds": ["7"],  # horse racing
-                        "marketCountries": ["AU"],
+                        "marketCountries": list(countries),
                         "marketTypeCodes": ["WIN"],
                         "marketStartTime": {
                             "from": cursor.isoformat(),
@@ -532,13 +551,9 @@ class BetfairClient:
                 markets.append(bm)
             cursor = chunk_to
         self.status.catalogue_markets = len(markets)
-        log.info("betfair: %d AU win markets in catalogue", len(markets))
-        if not markets:
-            log.warning(
-                "betfair: the catalogue has no Australian WIN markets starting "
-                "within 14h before / 38h after %s UTC — nothing for the exchange "
-                "to price (wrong --date, or no AU racing in that span)", for_date,
-            )
+        log.info(
+            "betfair: %d %s win markets in catalogue", len(markets), "/".join(countries)
+        )
         return markets
 
     def fetch_market_books(self, markets: list[BetfairMarket]) -> None:
@@ -597,6 +612,10 @@ class BetfairClient:
                 continue
             status = book.get("status", "UNKNOWN")
             market.book_status = status
+            market.inplay = bool(book.get("inplay"))
+            market.total_matched = book.get("totalMatched")
+            market.fetched_at = fetched_at
+            market.runners = []  # a re-fetched book replaces the old quotes
             names = getattr(market, "_catalogue_runners", {})
             active = [r for r in book.get("runners", []) if r.get("status") in (None, "ACTIVE")]
             market.removed_names = [

@@ -93,6 +93,32 @@ class Settings(BaseSettings):
     stale_price_seconds: int = 600
     min_edge_pct: float = 0.0
 
+    # --- Race value scanner (python -m app.race_value) -----------------------
+    # Sportsbet fixed win odds vs Betfair as the source of truth, races
+    # jumping within the next VALUE_WINDOW_MINUTES, refreshed every
+    # VALUE_INTERVAL_SECONDS.
+    value_interval_seconds: int = 60
+    value_window_minutes: int = 20
+    # A race whose advertised start passed this long ago is still shown while
+    # it has not jumped (late starts are common); in-play markets never are.
+    value_grace_minutes: int = 2
+    # Betfair countries to load (Sportsbet's Aus/NZ meetings).
+    value_betfair_countries: str = "AU,NZ"
+    # Betfair commission on net winnings, used only for the back-Sportsbet /
+    # lay-Betfair lock-in column (never for the fair probability). Betfair
+    # Australia's base rate depends on the race's state; set yours here.
+    betfair_commission: float = 0.08
+    # A row is reliable only when the runner's Betfair relative spread is
+    # within this and the market has matched at least VALUE_MIN_MATCHED.
+    value_max_relative_spread: float = 0.10
+    value_min_matched: float = 2000.0
+    # A midpoint book far from 100% means a thin or half-formed market.
+    value_max_book_deviation: float = 0.05
+    # EV above this is almost always stale data or a scratching in flight.
+    value_suspect_ev: float = 0.30
+    # Sportsbet and Betfair snapshots further apart than this are flagged.
+    value_max_snapshot_gap_seconds: float = 45.0
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -1,5 +1,24 @@
 # BUILD STATUS
 
+## 2026-10-10 — Race value scanner (Sportsbet vs Betfair, next 20 minutes)
+
+`python -m app.race_value` (or `value-loop.bat`) loops every 60 seconds over
+the races jumping in the next 20 minutes and ranks every runner by EV of
+Sportsbet's fixed win price against Betfair as the truth. Details and the
+adjustments in README §9a. Per pass: one Betfair catalogue call for the
+window, the Sportsbet AllRacing listing, racecards only for races the
+exchange has a market for, then one `listMarketBook` call last so the two
+snapshots are close together.
+
+Supporting changes: `BetfairClient.list_win_markets(from, to, countries)`
+(the day catalogue now calls it); `BetfairMarket` records `inplay`, the
+market's matched volume and the book time; `RaceInfo.win_market_status`
+carries Sportsbet's win-market code ("S" = suspended); the "still priced by
+Sportsbet but REMOVED on Betfair" warning no longer fires for runners both
+sides have scratched. Raw-response archiving is off by default for this loop
+(`--archive` turns it on). 202 tests pass; the scanner has not been run
+against the live sites from here (the build host cannot reach either).
+
 ## 2026-10-03 — Betfair connection diagnosis and hardening
 
 Report: "it's not connecting to Betfair despite having the API

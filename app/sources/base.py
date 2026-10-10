@@ -60,6 +60,10 @@ class RaceInfo:
     name: str | None = None
     runners: list[RunnerInfo] = field(default_factory=list)
     winner_names: list[str] = field(default_factory=list)  # populated once resulted
+    # Status code of the win market the runners came from ("A" open, "S"
+    # suspended), when the source gives one. A suspended market's prices
+    # cannot be bet, whatever the race status says.
+    win_market_status: str | None = None
 
     def active_runners(self) -> list[RunnerInfo]:
         return [r for r in self.runners if r.status == "active"]

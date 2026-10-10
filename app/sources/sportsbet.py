@@ -827,5 +827,6 @@ class SportsbetClient:
             name=_first(top, "eventName", "raceName", "name"),
             runners=runners,
             winner_names=winners,
+            win_market_status=win_market_code or None,
         )
         return RacecardInfo(meeting=meeting, races=[race], fetched_at=fetched_at)

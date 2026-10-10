@@ -5,3 +5,4 @@ SQLAlchemy>=2.0
 tenacity>=8.2
 rich>=13.7
 pytest>=8.0
+tzdata>=2024.1; sys_platform == "win32"

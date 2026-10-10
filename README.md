@@ -197,6 +197,46 @@ per-host requests (`HTTP_MIN_REQUEST_INTERVAL_SECONDS`) and retries with
 exponential backoff. A GitHub Actions workflow
 (`.github/workflows/scan.yml`) exists for coarse scheduled capture.
 
+## 9a. Race value scanner (Sportsbet vs Betfair, next 20 minutes)
+
+```bash
+python -m app.race_value            # every 60s; or double-click value-loop.bat
+python -m app.race_value --once     # one pass
+python -m app.race_value --all --min-ev 0.02 --window 30
+```
+
+Every minute: the thoroughbred races jumping in the next
+`VALUE_WINDOW_MINUTES` that have both a Sportsbet racecard and a Betfair
+WIN market; every runner's Sportsbet fixed win price is compared with the
+exchange's probability and the table is sorted by EV. **Betfair is
+required** here (it is the source of truth) and logs in once per run, not
+once a minute.
+
+Adjustments that make the two comparable:
+
+* Betfair probability = midpoint of best back and best lay **in probability
+  space**, `(1/back + 1/lay)/2`, then the race's book is **normalised to
+  100%** so the spread is gone and only the market's view is left.
+* The **field is reconciled**: a runner Sportsbet has scratched but the
+  exchange still lists is removed from the Betfair book before normalising
+  (`RENORM` flag); a runner the exchange removed but Sportsbet still prices
+  is reported and not valued.
+* Sportsbet's price is **not de-vigged**: it is the price you are paid. Its
+  overround is shown (`SB ovr`).
+* **Commission** is not part of the fair probability; it only enters the
+  `Lock` column (back Sportsbet, lay Betfair at the best lay,
+  `BETFAIR_COMMISSION` on the lay winnings).
+* **In-play** exchange markets and **suspended** Sportsbet markets are never
+  compared; the gap between the two snapshots is checked (`GAP`).
+
+Columns: `EV = p_fair × SB − 1`; `EV@lay = SB / best_lay − 1` (conservative
+floor); `Lock` = profit per $1 of an immediate back/lay hedge; `Kelly` =
+full-Kelly fraction (display only). Rows failing a gate (`SPREAD` > 10%,
+`THIN` < $2,000 matched, `BOOK` midpoint book off 100% by > 5%,
+`ONE-SIDED`, `DELAYED` key, `SUSPECT` EV > 30%) are hidden unless `--all`.
+Every compared runner is appended to `data/value_log/<date>.csv` so the
+calls can be checked against results and closing prices later.
+
 ## 10. Run tests
 
 ```bash
