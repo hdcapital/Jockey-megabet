@@ -12,6 +12,10 @@ ev  = drz - 1
 It displays. It does not bet. There is no bet-placement code in this
 repository and none is planned.
 
+> **Bonus back if 2nd or 3rd.** `python -m app.bonusback_scan` picks the
+> horse to back when Sportsbet refunds 2nd/3rd as a bonus bet. See
+> [BONUSBACK.md](BONUSBACK.md).
+
 ---
 
 ## What is measured fact, and what is not

@@ -1,0 +1,32 @@
+BONUS BACK PICKER - which horse to back when Sportsbet offers
+"money back as a bonus bet if your horse runs 2nd or 3rd"
+==================================================================
+
+ONE-TIME SETUP
+  1. Install Python from https://www.python.org/downloads/
+     (when installing, TICK "Add Python to PATH").
+  2. Unzip this folder somewhere easy, e.g. your Desktop.
+
+EVERY TIME
+  Double-click  "BONUS BACK.bat"
+
+  It asks three things. Type a number and press Enter:
+    1. How much you're betting   (Enter = same as last time, starts at $50)
+    2. Which meeting             (a numbered list of today's meetings)
+    3. Which race                (a numbered list - or just press Enter for
+                                  every race left at that meeting)
+
+  It then shows, in a green box, the horse to back and roughly what the
+  bet is worth to you. A page with every horse's numbers opens in your
+  browser too. Press Enter to do another race, or type Q to quit.
+
+  "NO BET" in a yellow box means no horse in that race is worth it.
+
+TIPS
+  - Check the race again in the 10 minutes before it jumps; prices move.
+  - Optional: put your Betfair login in a file called .env (copy
+    .env.example) for slightly sharper chances. It works fine without.
+  - It never places a bet. You place the bet on Sportsbet yourself.
+
+(For the place-betting scanner that also lives in this folder, see
+ QUICKSTART.md and drz.bat.)
