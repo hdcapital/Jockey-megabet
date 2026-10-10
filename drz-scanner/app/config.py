@@ -126,6 +126,17 @@ class Settings(BaseSettings):
     # Below this many settled BET signals the UNPROVEN banner stays up.
     proven_signal_threshold: int = 300
 
+    # --- Bonus back if 2nd or 3rd (app.bonusback_scan) --------------------
+    # Cash value of $1 of Sportsbet bonus bet. Back/lay conversion on Betfair
+    # usually locks 0.70-0.80; set it to what you actually achieve.
+    bonus_bet_value: float = 0.70
+    # Largest stake the bonus refund is paid on.
+    bonus_max_stake: float = 50.0
+    # Betfair commission on net market winnings (used for the hedges).
+    betfair_commission: float = 0.08
+    # Smallest EV per $1 worth a pick.
+    bonus_min_ev: float = 0.02
+
     # --- Win-probability model ---------------------------------------------
     # Number of joined races required before the fitted-beta model is used.
     beta_min_races: int = 1500
