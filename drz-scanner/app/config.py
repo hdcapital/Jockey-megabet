@@ -127,9 +127,18 @@ class Settings(BaseSettings):
     proven_signal_threshold: int = 300
 
     # --- Bonus back if 2nd or 3rd (app.bonusback_scan) --------------------
-    # Cash value of $1 of Sportsbet bonus bet. Back/lay conversion on Betfair
-    # usually locks 0.70-0.80; set it to what you actually achieve.
+    # How $1 of Sportsbet bonus bet is valued. "live" measures it on the
+    # races after the promo race: the best Betfair lock (back at Sportsbet,
+    # lay at Betfair), or without Betfair the best p_true * (price - 1) —
+    # a bonus bet returns profit only. "fixed" always uses BONUS_BET_VALUE.
+    bonus_value_mode: str = "live"
+    # Fallback (and the "fixed" value) when no later race can be priced.
     bonus_bet_value: float = 0.70
+    # The live figure is the best price seen now; by the time the bonus is
+    # credited some of it will have gone, so it is scaled by this.
+    bonus_value_haircut: float = 0.95
+    # How many races after the promo race are priced to measure it.
+    bonus_value_lookahead_races: int = 8
     # Largest stake the bonus refund is paid on.
     bonus_max_stake: float = 50.0
     # Betfair commission on net market winnings (used for the hedges).

@@ -88,6 +88,11 @@ __all__ = [
     "PromoRace",
     "PromoRaceError",
     "value_promo_race",
+    "ConversionOption",
+    "conversion_options",
+    "low_liability_alternative",
+    "BonusValueEstimate",
+    "estimate_bonus_value",
 ]
 
 #: How a race's single promo bet is chosen.
@@ -596,4 +601,141 @@ def value_promo_race(
         pick=pick_best(vals, objective, terms),
         betfair_delayed=betfair_delayed and chosen == "betfair",
         place_market_winners=place_market_winners,
+    )
+
+
+# --- using a bonus bet ------------------------------------------------------------
+
+@dataclass
+class ConversionOption:
+    """One way to use a bonus bet of ``bonus`` dollars on one runner.
+
+    ``method`` is ``"lay"`` (back the bonus at Sportsbet, lay the same horse
+    on Betfair: the same cash whatever happens) or ``"keep"`` (just bet it and
+    take the chance; ``cash`` is then the expected value, not a promise).
+    """
+
+    race: PromoRace
+    valuation: BonusBackValuation
+    method: str
+    bonus: float
+    cash: float
+    per_dollar: float
+    lay_price: float | None = None
+    lay_stake: float | None = None
+    liability: float | None = None
+    enough_on_offer: bool = True
+
+    @property
+    def inputs(self) -> RunnerInputs:
+        return self.valuation.inputs
+
+
+def conversion_options(
+    races: list[PromoRace], bonus: float, commission: float
+) -> tuple[list[ConversionOption], list[ConversionOption]]:
+    """``(lay_options, keep_options)``, each best first.
+
+    Lay: per $1 of bonus ``(1-c)(O-1)/(L-c)`` is locked by laying
+    ``bonus*(O-1)/(L-c)`` at ``L``; the Betfair liability is that stake times
+    ``L-1``. Options whose lay stake is bigger than what Betfair has on offer
+    at that price are ranked after every option that can actually be filled.
+
+    Keep: the bonus pays ``O-1`` per $1 on a win, so the expected cash is
+    ``p*(O-1)`` with ``p`` the most conservative win chance held. Runners
+    beyond the model's win-price cap are left out: their chances are the
+    ones nothing has validated.
+    """
+    lay: list[ConversionOption] = []
+    keep: list[ConversionOption] = []
+    for pr in races:
+        for v in pr.valuations:
+            x = v.inputs
+            o = x.win_price
+            if x.bf_win_lay and x.bf_win_lay > 1.0:
+                per = bonus_bet_conversion(o, x.bf_win_lay, commission)
+                stake = bonus * (o - 1.0) / (x.bf_win_lay - commission)
+                lay.append(ConversionOption(
+                    race=pr, valuation=v, method="lay", bonus=bonus,
+                    cash=per * bonus, per_dollar=per, lay_price=x.bf_win_lay,
+                    lay_stake=stake, liability=stake * (x.bf_win_lay - 1.0),
+                    enough_on_offer=x.bf_win_lay_size is None or x.bf_win_lay_size >= stake,
+                ))
+            if v.eligible:
+                p = min([x.p_win] + [m[0] for m in x.alt_models.values()])
+                per = p * (o - 1.0)
+                keep.append(ConversionOption(
+                    race=pr, valuation=v, method="keep", bonus=bonus,
+                    cash=per * bonus, per_dollar=per,
+                ))
+    lay.sort(key=lambda c: (not c.enough_on_offer, -c.per_dollar))
+    keep.sort(key=lambda c: -c.per_dollar)
+    return lay, keep
+
+
+def low_liability_alternative(
+    lay: list[ConversionOption], tolerance: float = 0.03
+) -> ConversionOption | None:
+    """Among fillable lay options within ``tolerance`` per $1 of the best, the
+    one that ties up the least money on Betfair — if it is not the best itself."""
+    fillable = [c for c in lay if c.enough_on_offer]
+    if not fillable:
+        return None
+    best = fillable[0]
+    close = [c for c in fillable if c.per_dollar >= best.per_dollar - tolerance]
+    alt = min(close, key=lambda c: c.liability or 0.0)
+    return None if alt is best else alt
+
+
+@dataclass
+class BonusValueEstimate:
+    """What $1 of bonus bet is worth, measured on races you could use it in.
+
+    ``value`` is what the promo EV uses as ``r``. ``option`` is the bet it
+    came from, so the number can be checked and acted on; ``None`` when no
+    race could be priced and the configured fallback was used instead.
+    """
+
+    value: float
+    method: str          # "lay" | "keep" | "fallback"
+    raw: float | None
+    option: ConversionOption | None
+    detail: str
+
+
+def estimate_bonus_value(
+    races: list[PromoRace],
+    commission: float,
+    fallback: float,
+    haircut: float = 0.95,
+) -> BonusValueEstimate:
+    """``r`` from real prices instead of a constant.
+
+    Preference: the best *fillable* Betfair lock (``(1-c)(O-1)/(L-c)``),
+    because that is cash you can actually bank. Without one, the best
+    unhedged use, ``p_true * (O-1)`` — the bonus returns profit only, never
+    the stake. The result is multiplied by ``haircut`` because the bonus
+    arrives after the promo race and the best price seen now will not all
+    still be there; the raw figure is kept alongside.
+    """
+    lay, keep = conversion_options(races, 1.0, commission)
+    fillable = [c for c in lay if c.enough_on_offer]
+    if fillable:
+        best, method = fillable[0], "lay"
+    elif keep:
+        best, method = keep[0], "keep"
+    else:
+        return BonusValueEstimate(
+            fallback, "fallback", None, None,
+            f"no later race could be priced; using the configured {fallback:.2f}",
+        )
+    raw = best.per_dollar
+    value = min(max(raw * haircut, 0.0), 0.99)
+    x = best.inputs
+    how = (f"lock: back ${x.win_price:.2f}, lay {best.lay_price:.2f}" if method == "lay"
+           else f"bet it: {x.p_win:.0%} x ${x.win_price - 1:.2f} profit")
+    return BonusValueEstimate(
+        value, method, raw, best,
+        f"{best.race.venue} R{best.race.race_number} #{x.saddlecloth} {x.horse_name} "
+        f"({how}) = {raw:.2f}, x{haircut:.2f} for price drift",
     )

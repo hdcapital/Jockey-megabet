@@ -64,11 +64,33 @@ on a **3-winner** market):
   risk-free profit, provided you really convert the bonus at `r`. A 2-winner
   place market cannot do this, so no lock is shown for one.
 
-**Bonus conversion `r`.** A bonus bet returns winnings only. Backing it at
-`B` and laying at `L` locks `(1-c)(B-1)/(L-c)` per $1, which is about 0.70-0.80
-for a $6-$15 runner with a tight Betfair spread. The scanner prints the best
-conversion it can see in the races it scanned, so you can check your
-`--bonus-value` against it.
+**Bonus value `r` — measured live, not assumed.** A bonus bet returns
+profit only, never its stake, so $1 of bonus is worth what you can actually
+turn it into. Every run prices the next races starting at least 15 minutes
+after the promo race (where the bonus could actually be used;
+`BONUS_VALUE_LOOKAHEAD_RACES`, 8 by default) and takes:
+
+* **with Betfair** — the best lock you could actually fill: back at
+  Sportsbet at `O`, lay at Betfair at `L`, lay stake `(O-1)/(L-c)` per $1
+  of bonus, locking `(1-c)(O-1)/(L-c)` whatever happens;
+* **without Betfair** — the best `p_true × (O - 1)`: true win chance times
+  the profit the bonus would pay, for runners within the model's
+  price cap.
+
+That figure is multiplied by `BONUS_VALUE_HAIRCUT` (0.95), because the bonus
+arrives after the promo race and the best price seen now will not all still
+be there. The run prints the value and the bet it came from. If nothing
+later can be priced (say, the last race of the day), it falls back to
+`BONUS_BET_VALUE` (0.70). `BONUS_VALUE_MODE=fixed` or `--bonus-value` turns
+the live measurement off.
+
+**Using a bonus bet.** Menu option 2 ("Use a bonus bet I've got") prices the
+races you choose and gives step-by-step instructions: the horse to back with
+the bonus, the Betfair lay price and stake, how much of your Betfair balance
+the lay ties up, and what you keep whether it wins or loses. If that ties up
+too much, it also suggests a lower-liability option that keeps nearly as
+much. Without Betfair it names the best horse to just bet it on, and says
+plainly that this is an average, not a promise.
 
 **Stake.** Fractional Kelly (`KELLY_FRACTION`, a quarter by default) on the
 three-outcome bet, using the conservative probabilities, capped at
@@ -145,9 +167,10 @@ Re-run with your own assumptions:
 * Promo terms vary (stake cap, eligible bet types, whether dead heats for
   3rd qualify, one bet per race or per customer). Check them. `--max-stake`
   sets the cap.
-* `r` is the largest assumption. If you do not hedge your bonus bets, your
-  real `r` is the EV of the bonus bet, which is usually 0.5-0.65 at a
-  bookmaker's margin. Use `r*` to see how much the pick depends on it.
+* `r` is now measured, but it is still a forecast: it assumes later races
+  offer about what they offer now (hence the 5% haircut). An unhedged bonus
+  bet is worth its average only over many bets; one bet usually just loses.
+  `r*` shows how much each pick depends on `r`.
 * The lock assumes you get the lay prices shown, and both Betfair markets
   settle on the same field. A late scratching can change the Betfair place
   market's terms.

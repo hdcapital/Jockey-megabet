@@ -277,7 +277,7 @@ def test_menu_runs_without_typing_any_options(tmp_path, monkeypatch):
     monkeypatch.setattr(menu, "PREFS_PATH", tmp_path / "prefs.json")
     monkeypatch.setattr(menu, "REPORT_PATH", tmp_path / "bonusback.html")
     monkeypatch.setattr("app.bonusback_scan.open_betfair", lambda *a, **k: None)
-    answers = iter(["25", "1", "2", "q"])   # stake, meeting, race 7, quit
+    answers = iter(["1", "25", "1", "2", "q"])   # promo, stake, meeting, race 7, quit
     opened = []
     assert menu.run_menu(ask=lambda _p: next(answers), sb_factory=_FakeSportsbet,
                          open_browser=opened.append) == 0
@@ -287,7 +287,7 @@ def test_menu_runs_without_typing_any_options(tmp_path, monkeypatch):
 
     # Enter at the race prompt means every race at the meeting; Enter at the
     # stake prompt keeps the remembered amount.
-    answers = iter(["", "1", "", "q"])
+    answers = iter(["1", "", "1", "", "q"])
     assert menu.run_menu(ask=lambda _p: next(answers), sb_factory=_FakeSportsbet,
                          open_browser=lambda u: None) == 0
     page = (tmp_path / "bonusback.html").read_text()
@@ -301,3 +301,132 @@ def test_menu_shrugs_off_bad_input():
     assert _choose("", 3, lambda p: "9") is None
     assert _choose("", 3, lambda p: "Q") == "q"
     assert _choose("", 3, lambda p: "2") == 2
+
+
+def _exchange_race(settings, calibration):
+    race = _race(PRICES)
+    imp = np.array([1 / p for p in PRICES])
+    fair = imp ** 1.1 / (imp ** 1.1).sum()
+    ex = [ExchangeRunner(win_probability=float(q), win_reliable=True,
+                         win_lay=round(1 / q * 1.03, 2), win_lay_size=5000)
+          for q in fair]
+    return value_promo_race(race, calibration, settings, BonusBackTerms(), exchange=ex)
+
+
+def test_conversion_lay_locks_the_same_cash_both_ways(settings, calibration):
+    from app.bonusback import conversion_options
+
+    pr = _exchange_race(settings, calibration)
+    lay, keep = conversion_options([pr], 50.0, 0.08)
+    best = lay[0]
+    o = best.inputs.win_price
+    win_side = 50 * (o - 1) - best.lay_stake * (best.lay_price - 1)
+    lose_side = best.lay_stake * (1 - 0.08)
+    assert math.isclose(win_side, best.cash) and math.isclose(lose_side, best.cash)
+    assert all(best.per_dollar >= c.per_dollar for c in lay)
+    assert keep and all(c.method == "keep" for c in keep)
+
+
+def test_conversion_ranks_unfillable_lays_last(settings, calibration):
+    from app.bonusback import conversion_options
+
+    pr = _exchange_race(settings, calibration)
+    lay, _ = conversion_options([pr], 50.0, 0.08)
+    top = lay[0].inputs
+    top.bf_win_lay_size = 1.0   # nothing on offer at that price
+    lay2, _ = conversion_options([pr], 50.0, 0.08)
+    assert lay2[0].inputs is not top and not lay2[-1].enough_on_offer
+
+
+def test_conversion_screen_renders(settings, calibration, capsys):
+    from app.bonusback_menu import show_conversion
+    from app.reporting.tables import console
+
+    pr = _exchange_race(settings, calibration)
+    with console.capture() as cap:
+        show_conversion([pr], 50.0, 0.08, betfair=True)
+    out = cap.get()
+    assert "LAY the same horse" in out and "lay stake" in out
+    with console.capture() as cap:
+        show_conversion([value_promo_race(_race(PRICES), calibration, settings,
+                                          BonusBackTerms())], 50.0, 0.08, betfair=False)
+    assert "JUST BET IT" in cap.get()
+
+
+def test_menu_option_two_uses_a_bonus_bet(tmp_path, monkeypatch):
+    from app import bonusback_menu as menu
+
+    monkeypatch.setattr(menu, "PREFS_PATH", tmp_path / "prefs.json")
+    monkeypatch.setattr(menu, "REPORT_PATH", tmp_path / "bonusback.html")
+    monkeypatch.setattr("app.bonusback_scan.open_betfair", lambda *a, **k: None)
+    shown = []
+    monkeypatch.setattr(menu, "show_conversion",
+                        lambda results, bonus, c, betfair: shown.append((len(results), bonus)))
+    # use a bonus bet, $30, every race in the next hour, then quit
+    answers = iter(["2", "30", "", "q"])
+    assert menu.run_menu(ask=lambda _p: next(answers), sb_factory=_FakeSportsbet,
+                         open_browser=lambda u: None) == 0
+    assert shown == [(1, 30.0)]   # R6 is inside the hour, R7 is not
+
+
+def test_bonus_value_prefers_a_fillable_lock(settings, calibration):
+    from app.bonusback import conversion_options, estimate_bonus_value
+
+    pr = _exchange_race(settings, calibration)
+    est = estimate_bonus_value([pr], 0.08, fallback=0.70, haircut=0.95)
+    lay, _ = conversion_options([pr], 1.0, 0.08)
+    assert est.method == "lay"
+    assert math.isclose(est.raw, lay[0].per_dollar)
+    assert math.isclose(est.value, est.raw * 0.95)
+
+
+def test_bonus_value_without_betfair_is_profit_only(settings, calibration):
+    from app.bonusback import estimate_bonus_value
+
+    pr = value_promo_race(_race(PRICES), calibration, settings, BonusBackTerms())
+    est = estimate_bonus_value([pr], 0.08, fallback=0.70, haircut=1.0)
+    assert est.method == "keep"
+    # A bonus bet returns profit only: p * (O - 1), never p * O.
+    want = max(v.inputs.p_win * (v.inputs.win_price - 1) for v in pr.valuations if v.eligible)
+    assert math.isclose(est.value, want)
+
+
+def test_bonus_value_falls_back_when_nothing_priced():
+    from app.bonusback import estimate_bonus_value
+
+    est = estimate_bonus_value([], 0.08, fallback=0.66)
+    assert est.method == "fallback" and est.value == 0.66 and est.option is None
+
+
+def test_later_stubs_skip_races_the_bonus_cannot_reach():
+    from app.bonusback_scan import later_stubs
+
+    stubs = _FakeSportsbet().stubs          # R6 at +60 min, R7 at +70 min
+    after = stubs[0].start_time             # promo race is R6
+    assert later_stubs(stubs, after, 8) == []           # R7 is only 10 min later
+    assert [s.race_number for s in later_stubs(stubs, after - timedelta(minutes=10), 8)] == [7]
+
+
+class _FakeSportsbetLater(_FakeSportsbet):
+    def __init__(self):
+        super().__init__()
+        from app.sources.base import RaceStub
+
+        self.stubs.append(RaceStub(
+            event_id="E9", race_number=9,
+            start_time=datetime.now(timezone.utc) + timedelta(minutes=150),
+            name=None, status_code="A", betting_status=None, meeting_id="M",
+            meeting_name="Randwick", class_name="Horses - Aus/NZ"))
+
+
+def test_menu_values_the_bonus_on_later_races(tmp_path, monkeypatch):
+    from app import bonusback_menu as menu
+
+    monkeypatch.setattr(menu, "PREFS_PATH", tmp_path / "prefs.json")
+    monkeypatch.setattr(menu, "REPORT_PATH", tmp_path / "bonusback.html")
+    monkeypatch.setattr("app.bonusback_scan.open_betfair", lambda *a, **k: None)
+    answers = iter(["1", "50", "1", "1", "q"])   # promo, $50, Randwick, R6, quit
+    assert menu.run_menu(ask=lambda _p: next(answers), sb_factory=_FakeSportsbetLater,
+                         open_browser=lambda u: None) == 0
+    page = (tmp_path / "bonusback.html").read_text()
+    assert "Randwick R9" in page          # measured on the later race, not the fallback
