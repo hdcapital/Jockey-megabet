@@ -59,8 +59,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--meeting", default=None, help="every open race at meetings matching this")
     p.add_argument("--race", type=int, default=None, help="with --meeting: only this race")
     p.add_argument("--all", action="store_true", help="every open race today")
-    p.add_argument("--bonus-value", type=float, default=s.bonus_bet_value,
-                   help="cash value of $1 of bonus bet (default %(default)s)")
+    p.add_argument("--bonus-value", type=float, default=None,
+                   help="cash value of $1 of bonus bet. Default: measured live on the "
+                        "races after the promo race (BONUS_VALUE_MODE=live)")
     p.add_argument("--max-stake", type=float, default=s.bonus_max_stake,
                    help="largest stake the bonus is paid on (default %(default)s)")
     p.add_argument("--commission", type=float, default=s.betfair_commission,
@@ -230,11 +231,11 @@ def to_json(pr: PromoRace) -> dict:
 
 
 def value_stubs(sb, bf, chosen, calibration, settings, terms, objective,
-                show=None) -> tuple[list[PromoRace], list[str]]:
+                show=None, refresh: bool = True) -> tuple[list[PromoRace], list[str]]:
     """Fetch and value each chosen race. ``show`` is called on each result."""
     results: list[PromoRace] = []
     problems: list[str] = []
-    if bf is not None:
+    if bf is not None and refresh:
         bf.refresh()
     for st in chosen:
         try:
@@ -263,6 +264,50 @@ def value_stubs(sb, bf, chosen, calibration, settings, terms, objective,
     return results, problems
 
 
+#: A bonus bet is credited once the promo race is settled, so only races
+#: starting at least this long after it are places it could be used.
+BONUS_USABLE_AFTER_SECONDS = 15 * 60
+
+
+def later_stubs(stubs: list[RaceStub], after: datetime | None, n: int) -> list[RaceStub]:
+    """The ``n`` soonest open races starting comfortably after ``after``."""
+    from datetime import timedelta
+
+    from app.drz import EXCLUDED_EVENT_IDS
+
+    cutoff = (after or datetime.now(timezone.utc)) + timedelta(seconds=BONUS_USABLE_AFTER_SECONDS)
+    out = [s for s in stubs if s.is_open and s.start_time and s.start_time >= cutoff
+           and s.event_id not in EXCLUDED_EVENT_IDS]
+    return sorted(out, key=lambda s: s.start_time)[:n]
+
+
+def live_bonus_value(sb, bf, stubs, after, calibration, settings, commission: float):
+    """``r`` measured on the races after ``after``, or the configured fallback.
+
+    Uses the Betfair books already fetched for the promo races (no second
+    refresh), so the estimate and the promo valuation share one snapshot.
+    """
+    from app.bonusback import estimate_bonus_value
+
+    fallback = settings.bonus_bet_value
+    if (settings.bonus_value_mode or "live").strip().lower() != "live":
+        from app.bonusback import BonusValueEstimate
+
+        return BonusValueEstimate(fallback, "fallback", None, None,
+                                  f"BONUS_VALUE_MODE is fixed; using {fallback:.2f}")
+    later = later_stubs(stubs, after, settings.bonus_value_lookahead_races)
+    scratch = BonusBackTerms(bonus_value=fallback, commission=commission)
+    races, _problems = value_stubs(sb, bf, later, calibration, settings, scratch, "ev",
+                                   refresh=False)
+    return estimate_bonus_value(races, commission, fallback, settings.bonus_value_haircut)
+
+
+def with_bonus_value(terms: BonusBackTerms, r: float) -> BonusBackTerms:
+    from dataclasses import replace
+
+    return replace(terms, bonus_value=r)
+
+
 def open_betfair(for_date, settings, quiet: bool = False):
     bf = BetfairSession(for_date, settings)
     if not bf.configured:
@@ -288,7 +333,8 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
     calibration = load_calibration()
     terms = BonusBackTerms(
-        bonus_value=args.bonus_value, max_stake=args.max_stake,
+        bonus_value=args.bonus_value if args.bonus_value is not None else settings.bonus_bet_value,
+        max_stake=args.max_stake,
         commission=args.commission, min_ev=args.min_ev,
     )
     for_date = args.date or racing_today()
@@ -303,9 +349,16 @@ def main(argv: list[str] | None = None) -> int:
             if not chosen:
                 console.print("No open race matches the promo races given.")
                 return 1
+            if bf is not None:
+                bf.refresh()
+            if args.bonus_value is None:
+                est = live_bonus_value(sb, bf, stubs, chosen[0].start_time, calibration,
+                                       settings, terms.commission)
+                terms = with_bonus_value(terms, est.value)
+                console.print(f"[dim]Bonus bet valued at {est.value:.2f} per $1 — {est.detail}[/dim]\n")
             results, problems = value_stubs(
                 sb, bf, chosen, calibration, settings, terms, args.objective,
-                show=lambda pr: render(pr, terms, args.objective),
+                show=lambda pr: render(pr, terms, args.objective), refresh=False,
             )
             for msg in problems:
                 console.print(f"[yellow]{msg}[/yellow]")

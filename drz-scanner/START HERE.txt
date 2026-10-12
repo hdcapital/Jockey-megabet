@@ -10,17 +10,28 @@ ONE-TIME SETUP
 EVERY TIME
   Double-click  "BONUS BACK.bat"
 
-  It asks three things. Type a number and press Enter:
-    1. How much you're betting   (Enter = same as last time, starts at $50)
-    2. Which meeting             (a numbered list of today's meetings)
-    3. Which race                (a numbered list - or just press Enter for
-                                  every race left at that meeting)
+  First it asks what you want to do. Type a number and press Enter:
 
-  It then shows, in a green box, the horse to back and roughly what the
-  bet is worth to you. A page with every horse's numbers opens in your
-  browser too. Press Enter to do another race, or type Q to quit.
+  1 = PICK A HORSE FOR THE PROMO
+    It asks how much you're betting (Enter = same as last time), then the
+    meeting and race from numbered lists. A green box shows the horse to
+    back and roughly what the bet is worth. A page with every horse's
+    numbers opens in your browser too.
+    "NO BET" in a yellow box means no horse in that race is worth it.
 
-  "NO BET" in a yellow box means no horse in that race is worth it.
+  2 = USE A BONUS BET I'VE GOT
+    It asks how big the bonus bet is, then where you want to use it
+    (or press Enter for every race in the next hour). It tells you
+    exactly what to do:
+      - with Betfair: which horse to put the bonus bet on at Sportsbet,
+        and the exact LAY to place on Betfair, so you keep the same cash
+        whatever happens (usually 70-80% of the bonus).
+      - without Betfair: the best horse to just bet it on.
+
+  Press Enter to go again, M for the main menu, or Q to quit.
+
+  The bonus bet's value is worked out from today's real prices each time,
+  and the screen tells you which horse and price that came from.
 
 TIPS
   - Check the race again in the 10 minutes before it jumps; prices move.
