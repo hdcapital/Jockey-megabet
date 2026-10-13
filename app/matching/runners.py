@@ -72,7 +72,8 @@ def match_race_runners(
                 RunnerMatch(sr, None, "removed_on_betfair",
                             "Betfair lists this runner as REMOVED (scratched)")
             )
-            scratched_on_betfair.append(sr.horse_name)
+            if sr.status != "scratched":  # both sides agree otherwise
+                scratched_on_betfair.append(sr.horse_name)
             continue
         if sr.saddlecloth is not None and len(by_cloth.get(sr.saddlecloth, [])) == 1:
             cand = by_cloth[sr.saddlecloth][0]
@@ -110,7 +111,7 @@ def match_race_runners(
             race_label or "(race)", ", ".join(scratched_on_betfair),
         )
     if unmatched:
-        matched = len(sportsbet_runners) - len(unmatched) - len(scratched_on_betfair)
+        matched = sum(1 for m in matches if m.status == "matched")
         sample = ", ".join(q.runner_name for q in betfair_quotes[:4]) or "(no runners)"
         level = log.warning if matched * 2 < len(sportsbet_runners) else log.info
         level(

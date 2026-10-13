@@ -93,6 +93,53 @@ class Settings(BaseSettings):
     stale_price_seconds: int = 600
     min_edge_pct: float = 0.0
 
+    # --- Race value scanner (python -m app.race_value) -----------------------
+    # Sportsbet fixed odds vs Betfair as the source of truth, races jumping
+    # within the next VALUE_WINDOW_MINUTES, refreshed every
+    # VALUE_INTERVAL_SECONDS.
+    value_interval_seconds: int = 60
+    value_window_minutes: int = 20
+    # A race whose advertised start passed this long ago is still shown while
+    # it has not jumped (late starts are common); in-play markets never are.
+    value_grace_minutes: int = 2
+    # Betfair countries to load (Sportsbet's Aus/NZ meetings).
+    value_betfair_countries: str = "AU,NZ"
+    # Compare Sportsbet's fixed place price with Betfair's place market too.
+    value_include_places: bool = True
+    # Betfair commission on net winnings, used only for the lock-in column
+    # (never for the fair probability). Betfair Australia's base rate depends
+    # on the race's state; set yours here.
+    betfair_commission: float = 0.08
+    # Betfair's price for a runner is the average back and lay odds for this
+    # stake (AUD) across the visible price levels.
+    value_depth_stake: float = 100.0
+    # Trust gates: back/lay at most this many Betfair price steps apart, and
+    # at least this much matched on the market (win / place).
+    value_max_spread_ticks: int = 3
+    value_min_matched: float = 2000.0
+    value_min_matched_place: float = 500.0
+    # A market whose midpoints add up this far from 100% is thin or forming.
+    value_max_book_deviation: float = 0.05
+    # An edge above this is almost always stale data or a scratching.
+    value_suspect_ev: float = 0.30
+    # Sportsbet and Betfair snapshots further apart than this are flagged.
+    value_max_snapshot_gap_seconds: float = 45.0
+    # A bet worth a look: edge of at least VALUE_MIN_EV on
+    # VALUE_CONFIRM_SCANS scans in a row.
+    value_min_ev: float = 0.02
+    value_confirm_scans: int = 2
+    # Closing prices: races with a signal are polled this often near the jump.
+    value_close_poll_seconds: int = 15
+    # Stake suggestion: a fraction of full Kelly, of this bankroll (AUD).
+    # 0 shows the stake as a percentage of your bank instead.
+    value_bankroll: float = 0.0
+    value_kelly_fraction: float = 0.25
+    # Alert sound: "confirmed" chimes when a bet becomes worth a look,
+    # "watching" also chimes at the first sighting, "off" is silent.
+    # VALUE_SOUND_FILE plays your own .wav instead of the built-in chime.
+    value_sound: str = "confirmed"
+    value_sound_file: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

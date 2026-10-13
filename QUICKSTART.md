@@ -1,5 +1,9 @@
 # Quickstart (for beginners)
 
+> **Race value scanner (Sportsbet vs Betfair, next 20 minutes):** just
+> double-click **START.bat** — see [RACE-VALUE-GUIDE.md](RACE-VALUE-GUIDE.md).
+> The rest of this page is the Jockey Megabet scanner.
+
 You need: a computer (Mac or Windows) on an **Australian** internet
 connection. Sportsbet only answers Australian IPs — that's why this can't
 run on GitHub's servers or most overseas clouds (verified in BUILD_STATUS.md).

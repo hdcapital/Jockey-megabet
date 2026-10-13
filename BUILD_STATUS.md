@@ -1,5 +1,60 @@
 # BUILD STATUS
 
+## 2026-10-10 (2) — Race value scanner: closing line, depth, ticks, confirmation, places, menu
+
+* **Closing line and results**: every signal is followed to the jump (its
+  markets polled every 15s in the last 90s) and to settlement (Betfair runner
+  status and BSP). Results go to `data/value_results.csv` and pending state
+  to `data/value_state.json`. `--report` gives a plain-English verdict
+  (beat-the-close rate, CLV, vs BSP, flat-stake P&L) by confirmed/all,
+  win/place and edge bucket.
+* **Depth-aware exchange price**: average back/lay odds for a $100 test
+  stake over the three visible levels; `SHALLOW` when the top of the book
+  can't fill it.
+* **Spread gate in Betfair ticks** (`VALUE_MAX_SPREAD_TICKS`, 3) replaces
+  the 10% relative gate.
+* **Two-scan confirmation** before a row is a bet worth a look (edge ≥ 2%).
+* **Places**: Sportsbet fixed place price (`placePrice` in the `L` entry,
+  live-verified by drz-scanner) vs the Betfair place market. Compared only
+  when Sportsbet's `numPlaces` equals Betfair's `numberOfWinners`; the
+  place market is paired with its win market by Betfair event id and start
+  time, since AU place markets are named "To Be Placed".
+* **Ease of use**: `START.bat` / `start.command` (installs dependencies on
+  first run, then a numbered menu), a Betfair setup wizard that writes `.env`
+  and tests the login, a plain-English live screen (bets in words, stake
+  suggestion from your bank, flag key, results so far, countdown), logs to
+  `data/logs/` instead of the screen, and `RACE-VALUE-GUIDE.md`.
+* Code moved into `app/value/` (pricing, compare, tracker, scanner,
+  display, report). The Betfair adapter gains `list_markets` (WIN+PLACE,
+  event id), full price ladders, `numberOfWinners`, runner statuses and
+  `fetch_results` (BSP) with weight-aware chunking.
+
+220 tests pass, including a full run through fake Sportsbet and Betfair
+servers: signal, confirmation, closing price, settlement, results CSV and
+report. **Not yet verified live:** whether Betfair returns `actualSP` with the
+`SP_AVAILABLE` projection after the off (the BSP column stays empty if not),
+and the AU place market name.
+
+
+## 2026-10-10 — Race value scanner (Sportsbet vs Betfair, next 20 minutes)
+
+`python -m app.race_value` (or `value-loop.bat`) loops every 60 seconds over
+the races jumping in the next 20 minutes and ranks every runner by EV of
+Sportsbet's fixed win price against Betfair as the truth. Details and the
+adjustments in README §9a. Per pass: one Betfair catalogue call for the
+window, the Sportsbet AllRacing listing, racecards only for races the
+exchange has a market for, then one `listMarketBook` call last so the two
+snapshots are close together.
+
+Supporting changes: `BetfairClient.list_win_markets(from, to, countries)`
+(the day catalogue now calls it); `BetfairMarket` records `inplay`, the
+market's matched volume and the book time; `RaceInfo.win_market_status`
+carries Sportsbet's win-market code ("S" = suspended); the "still priced by
+Sportsbet but REMOVED on Betfair" warning no longer fires for runners both
+sides have scratched. Raw-response archiving is off by default for this loop
+(`--archive` turns it on). 202 tests pass; the scanner has not been run
+against the live sites from here (the build host cannot reach either).
+
 ## 2026-10-03 — Betfair connection diagnosis and hardening
 
 Report: "it's not connecting to Betfair despite having the API
