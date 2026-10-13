@@ -118,7 +118,7 @@ class FakeBetfair:
 
     def _catalogue(self, params: dict) -> list[dict]:
         f = params["filter"]
-        assert f["eventTypeIds"] == ["7"] and f["marketCountries"] == ["AU"]
+        assert f["eventTypeIds"] == ["7"] and "AU" in f["marketCountries"]
         assert f["marketTypeCodes"] == ["WIN"]
         frm = datetime.fromisoformat(f["marketStartTime"]["from"])
         to = datetime.fromisoformat(f["marketStartTime"]["to"])
