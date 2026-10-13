@@ -41,12 +41,13 @@ It never places a bet. You decide.
 | Choice | What it does |
 |---|---|
 | 1 | Live scanner: races in the next 20 minutes, updated every minute |
-| 2 | Results report: are the edges real? |
-| 3 | Set up or change your Betfair login, bank and commission |
-| 4 | Test your Betfair login |
-| 5 | Open the results spreadsheet (every flagged bet and how it went) |
-| 6 | Open the settings file |
-| 7 | Play the alert sound |
+| 2 | Live scanner showing every runner, including ones whose Betfair price isn't trustworthy yet |
+| 3 | Results report: are the edges real? |
+| 4 | Set up or change your Betfair login, bank and commission |
+| 5 | Test your Betfair login |
+| 6 | Open the results spreadsheet (every flagged bet and how it went) |
+| 7 | Open the settings file |
+| 8 | Play the alert sound |
 
 ## Reading the screen
 
@@ -79,14 +80,16 @@ once and disappears is usually a price Sportsbet hasn't updated yet, or a
 scratching that's still going through.
 
 The **table** below shows every horse compared, best edge first. Rows with
-a **flag** are hidden unless you start with `--all`, because Betfair's price
+a **flag** are hidden unless you choose **2** from the menu, because Betfair's price
 for them can't be trusted yet. The key under the table says what each flag
-means. Rows like that never become bets.
+means. Rows like that never become bets. The **Matched** column is how much
+money has been traded on that race's Betfair market so far: the more, the
+more you can trust Betfair's fair price.
 
 When a flagged bet's race has run you'll see a line like
 `Result: Horse A (Randwick R1 win at $3.40) WON · vs Betfair's closing price +9.1%`.
 
-## Are the edges real? (menu 2)
+## Are the edges real? (menu 3)
 
 For each bet worth a look, the scanner records:
 
@@ -104,7 +107,7 @@ far longer to mean anything because luck dominates it. Everything is in
 Leave the scanner running at the jump for the closing-price numbers to be
 accurate. The report warns you if the closing prices were taken early.
 
-## Settings (menu 6)
+## Settings (menu 7)
 
 The settings file has a short explanation above each value. The ones you're
 most likely to change:
@@ -126,12 +129,12 @@ The screen says what's wrong and what to do in a red box. The common cases:
 
 * **"Can't reach Sportsbet"**: you're not on an Australian connection, or a
   VPN is on.
-* **"Betfair refused the login"**: re-enter it with menu 3. The box shows
+* **"Betfair refused the login"**: re-enter it with menu 4. The box shows
   Betfair's own reason, for example a wrong password or the account needing
   attention on the Betfair website. After a refusal the scanner waits 10
   minutes before trying again, so Betfair doesn't lock the account.
 * **"DELAYED key"**: you're using Betfair's delayed application key. Switch
-  to the Live key (menu 3).
+  to the Live key (menu 4).
 
 Detailed logs are in `data/logs/`, one file per day.
 

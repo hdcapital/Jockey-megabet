@@ -1,6 +1,6 @@
 """Set up (or change) the Betfair login, step by step, and test it.
 
-Run: double-click START.bat and choose 3, or ``python -m app.setup_wizard``.
+Run: double-click START.bat and choose 4, or ``python -m app.setup_wizard``.
 
 Answers are written to the project's ``.env`` file (never committed, never
 logged). Press Enter at any question to keep what is already there.

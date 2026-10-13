@@ -34,6 +34,19 @@ def runner_text(row: ValueRow) -> str:
     return f"{row.saddlecloth}. {row.horse}" if row.saddlecloth else row.horse
 
 
+def money_text(amount: float | None) -> str:
+    """Compact dollars: $850, $12.3k, $1.4m."""
+    if amount is None:
+        return "—"
+    if amount >= 1_000_000:
+        return f"${amount / 1_000_000:.1f}m"
+    if amount >= 10_000:
+        return f"${amount / 1_000:.0f}k"
+    if amount >= 1_000:
+        return f"${amount / 1_000:.1f}k"
+    return f"${amount:,.0f}"
+
+
 def plural(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
 
@@ -51,7 +64,7 @@ def error_help(error: str) -> str:
     low = error.lower()
     if "login" in low:
         return ("Your Betfair login was refused. Close this window, run START.bat "
-                "and choose 3 to re-enter it. The reason Betfair gave is above.")
+                "and choose 4 to re-enter it. The reason Betfair gave is above.")
     if "sportsbet" in low:
         return ("Sportsbet only answers Australian internet connections. Turn off "
                 "any VPN and check you're online in Australia.")
@@ -143,7 +156,7 @@ def render(
                   title="All compared runners, best edge first", title_justify="left")
         cols = [("Jump", "right"), ("Race", "left"), ("Bet", "left"),
                 ("Runner", "left"), ("Sportsbet", "right"), ("Fair", "right"),
-                ("Edge", "right"), ("Edge@lay", "right"), ("Seen", "right"),
+                ("Edge", "right"), ("Matched", "right"), ("Edge@lay", "right"), ("Seen", "right"),
                 ("Betfair back/lay", "right"), ("Lock-in", "right"), ("Flags", "left")]
         narrow_drop = {"Edge@lay", "Betfair back/lay", "Lock-in"}
         for col, just in cols:
@@ -157,6 +170,7 @@ def render(
                 "Bet": "win" if r.kind == "WIN" else f"place{r.places}",
                 "Runner": runner_text(r), "Sportsbet": f"{r.sb_odds:.2f}",
                 "Fair": f"{r.fair_odds:.2f}", "Edge": f"[{colour}]{r.ev:+.1%}[/{colour}]",
+                "Matched": money_text(r.bf_matched),
                 "Edge@lay": f"{r.ev_at_lay:+.1%}" if r.ev_at_lay is not None else "—",
                 "Seen": f"{r.streak}×" if r.streak else "",
                 "Betfair back/lay": f"{r.bf_back or 0:.2f} / {r.bf_lay or 0:.2f}",
@@ -171,12 +185,13 @@ def render(
         console.print("No runners to compare in this window.")
     if hidden and not show_all:
         console.print(f"[dim]{hidden} rows hidden because Betfair's price for them isn't "
-                      "trustworthy yet (start with --all to see them).[/dim]")
+                      "trustworthy yet (choose 2 from the menu to see them).[/dim]")
 
     used = sorted({f.split()[0] if not f.startswith("8 ") else "8 RUNNERS"
                    for r in rows[:top] for f in r.flags})
     key = ("[dim]Edge = how much more Sportsbet pays than Betfair says it should "
-           "(+10% = $1.10 back per $1 on average).  Edge@lay = the same against Betfair's "
+           "(+10% = $1.10 back per $1 on average).  Matched = money traded on that "
+           "Betfair market so far (more = more trustworthy fair price).  Edge@lay = the same against Betfair's "
            "worst price.  Seen = scans in a row with value.  Lock-in = guaranteed profit "
            "if you lay it straight back on Betfair.")
     if used:

@@ -16,12 +16,13 @@ MENU = """
  │  RACE VALUE SCANNER — Sportsbet vs Betfair                   │
  ├──────────────────────────────────────────────────────────────┤
  │  1  Start the live scanner (races in the next 20 minutes)    │
- │  2  Results report — are the edges real?                     │
- │  3  Set up / change my Betfair login                         │
- │  4  Test my Betfair login                                    │
- │  5  Open the results spreadsheet                             │
- │  6  Open the settings file                                   │
- │  7  Play the alert sound                                     │
+ │  2  Live scanner, show EVERY runner (even shaky prices)      │
+ │  3  Results report — are the edges real?                     │
+ │  4  Set up / change my Betfair login                         │
+ │  5  Test my Betfair login                                    │
+ │  6  Open the results spreadsheet                             │
+ │  7  Open the settings file                                   │
+ │  8  Play the alert sound                                     │
  │  Q  Quit                                                     │
  └──────────────────────────────────────────────────────────────┘
 """
@@ -61,30 +62,33 @@ def main() -> int:
     while True:
         print(MENU)
         try:
-            choice = input(" Choose 1-7 or Q: ").strip().lower()
+            choice = input(" Choose 1-8 or Q: ").strip().lower()
         except (KeyboardInterrupt, EOFError):
             return 0
         if choice == "1":
             print("\nStarting... (press Ctrl+C to stop and come back here)\n")
             _run("app.race_value")
-        elif choice == "2":
+        elif choice in ("2", "1 all", "1 --all", "--all", "all"):
+            print("\nStarting, showing every runner... (press Ctrl+C to stop and come back here)\n")
+            _run("app.race_value", "--all", "--top", "60")
+        elif choice == "3":
             _run("app.race_value", "--report")
             input("\n Press Enter to go back to the menu...")
-        elif choice == "3":
+        elif choice == "4":
             _run("app.setup_wizard")
             input("\n Press Enter to go back to the menu...")
-        elif choice == "4":
+        elif choice == "5":
             from app.setup_wizard import test_login
             test_login()
             input("\n Press Enter to go back to the menu...")
-        elif choice == "5":
-            _open(PROJECT_ROOT / "data" / "value_results.csv")
         elif choice == "6":
+            _open(PROJECT_ROOT / "data" / "value_results.csv")
+        elif choice == "7":
             env, example = PROJECT_ROOT / ".env", PROJECT_ROOT / ".env.example"
             if not env.exists() and example.exists():
                 env.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
             _open(env)
-        elif choice == "7":
+        elif choice == "8":
             _run("app.value.sound")
         elif choice in ("q", "quit", "exit"):
             return 0
